@@ -111,7 +111,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ message: 'OK' });
     }
 
-    // 6. 初始化 Clients (在 Handler 內部初始化以確保環境變數最新且 Instance 獨立)
+    // 6. 初始化 Clients
     const client = new Client({
       channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
       channelSecret: process.env.CHANNEL_SECRET,
@@ -131,7 +131,6 @@ export default async function handler(req, res) {
            throw new Error("API_KEY_MISSING");
         }
         
-        // 建立新的 AI Client 實例
         const ai = new GoogleGenAI({ apiKey: apiKey });
 
         const response = await ai.models.generateContent({
@@ -140,8 +139,7 @@ export default async function handler(req, res) {
           config: {
             systemInstruction: SYSTEM_INSTRUCTION,
             temperature: 0.3,
-            maxOutputTokens: 600,
-            // 關鍵修正：設定安全過濾器為 BLOCK_NONE，避免誤判行政用語 (如死亡、處罰)
+            maxOutputTokens: 2048, // 增加到 2048 以避免回答被截斷
             safetySettings: [
                 { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
                 { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
@@ -151,12 +149,10 @@ export default async function handler(req, res) {
           },
         });
 
-        // 確保有文字回應，若被阻擋或發生錯誤，給予明確回覆
         let replyText = response.text;
         
         if (!replyText) {
-             console.warn("Gemini response text is empty. Checking candidates/safety.");
-             // 如果回應是空的，通常是因為 Safety Filter 即使設了 BLOCK_NONE 還是極端情況，或是模型錯誤
+             console.warn("Gemini response text is empty.");
              replyText = "報告同仁，阿標剛才分神了（回應內容為空），請您再複述一次問題。";
         }
 
