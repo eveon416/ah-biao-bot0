@@ -129,8 +129,22 @@ export default async function handler(req, res) {
     
     // 7. 處理所有事件
     await Promise.all(events.map(async (event) => {
+      // 只處理文字訊息
       if (event.type !== 'message' || event.message.type !== 'text') {
         return Promise.resolve(null);
+      }
+
+      const userMessage = event.message.text;
+      const sourceType = event.source.type; // 'user', 'group', or 'room'
+
+      // 【群組過濾機制】
+      // 如果是在群組(group)或多人聊天室(room)
+      if (sourceType === 'group' || sourceType === 'room') {
+        // 檢查訊息是否包含呼叫關鍵字「阿標」
+        if (!userMessage.includes('阿標')) {
+            // 如果沒叫阿標，就已讀不回，避免打擾群組對話
+            return Promise.resolve(null);
+        }
       }
 
       try {
@@ -142,7 +156,7 @@ export default async function handler(req, res) {
 
         const response = await ai.models.generateContent({
           model: 'gemini-2.5-flash',
-          contents: event.message.text,
+          contents: userMessage, // 直接將使用者訊息送給 AI，包含「阿標」二字也沒關係，AI 知道這是他的名字
           config: {
             // 加入 Google Search Tool
             tools: [{ googleSearch: {} }],
@@ -173,7 +187,10 @@ export default async function handler(req, res) {
       } catch (innerError) {
         console.error('Event Processing Error:', innerError);
         
+        // 在群組中如果發生錯誤，通常選擇保持安靜，除非是嚴重的系統設定錯誤，
+        // 這裡為了除錯方便，若是私訊則回報錯誤，群組則視情況回報
         let errorMsg = '報告同仁，系統連線發生異常，請稍後再試。';
+        
         if (innerError.message === 'API_KEY_MISSING') {
             errorMsg = '報告同仁，系統未設定 API 金鑰。';
         }
