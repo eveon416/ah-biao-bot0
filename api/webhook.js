@@ -1,34 +1,44 @@
 import { GoogleGenAI } from "@google/genai";
 import { Client, validateSignature } from "@line/bot-sdk";
-import { Buffer } from 'node:buffer';
 
-// Vercel Serverless Function 設定
+// Vercel Serverless Function Config
+// Note: This is specific to Next.js but kept for documentation.
+// In standard Vercel functions, body parsing cannot always be disabled easily.
 export const config = {
   api: {
-    bodyParser: false, // 必須關閉，因為我們需要 Raw Body 來驗證簽章
+    bodyParser: false,
   },
 };
 
-// 讀取 Raw Body 的輔助函式 (使用 Buffer 確保二進位資料正確)
+// Robust Raw Body Reader
 async function getRawBody(req) {
-  const chunks = [];
-  for await (const chunk of req) {
-    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  // If request is already parsed or not readable, return null to signal fallback
+  if (req.readableEnded || !req[Symbol.asyncIterator]) {
+    return null;
   }
-  return Buffer.concat(chunks);
+  
+  const chunks = [];
+  try {
+      for await (const chunk of req) {
+        chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+      }
+      return Buffer.concat(chunks);
+  } catch (error) {
+      console.error("Error reading stream:", error);
+      return null;
+  }
 }
 
-// 初始化 LINE Client
+// Initialize LINE Client
 const client = new Client({
   channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.CHANNEL_SECRET,
 });
 
-// 初始化 Gemini Client
-// 使用 process.env.API_KEY，若未設定不會立即報錯，等到呼叫時才處理
+// Initialize Gemini Client
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
 
-// 系統提示詞
+// System Instruction
 const SYSTEM_INSTRUCTION = `
 **角色設定 (Role):**
 你是一位在台灣政府機關服務超過 20 年的「資深行政主管」，大家都尊稱你為「阿標」。你對公務體系的運作瞭若指掌，特別精通《政府採購法》、《文書處理手冊》、《勞動基準法》以及最新的《軍公教人員年終工作獎金發給注意事項》。你的個性沉穩、剛正不阿，但對待同仁（使用者）非常熱心，總是不厭其煩地指導後進，並習慣使用公務員的標準語氣（如「報告同仁」、「請 核示」、「依規定」）。
@@ -77,78 +87,89 @@ const SYSTEM_INSTRUCTION = `
 4.  **風險提示**：若使用者的做法可能違規（如：提前發放、計算錯誤），請嚴肅提醒。
 `;
 
-// 主處理函式
+// Main Handler
 export default async function handler(req, res) {
-  // 1. 只接受 POST 請求 (避免 GET 請求產生錯誤日誌)
+  // 1. Method Check
   if (req.method !== 'POST') {
     return res.status(405).send('Method Not Allowed');
   }
 
   try {
-    // 2. 檢查必要環境變數
-    // 這是最常見的 500 錯誤來源，如果 Vercel 後台沒設定，這裡直接擋下來並印出清楚的 Log
+    // 2. Env Var Check
     if (!process.env.CHANNEL_SECRET || !process.env.CHANNEL_ACCESS_TOKEN) {
-      console.error('CRITICAL ERROR: LINE Channel Secret or Access Token is missing in Vercel Environment Variables.');
-      return res.status(500).send('Server Configuration Error: Missing LINE Config');
+      console.error('CRITICAL: Missing LINE Environment Variables');
+      return res.status(500).send('Server Config Error');
     }
 
-    // 3. 取得 Raw Body
-    const rawBody = await getRawBody(req);
-    const bodyText = rawBody.toString('utf-8');
+    // 3. Body Parsing Logic (Hybrid approach for Vercel)
+    let bodyText = '';
+    let body = null;
+
+    // Case A: Vercel already parsed the body (Content-Type: application/json)
+    if (req.body && typeof req.body === 'object') {
+      console.log("Using Vercel pre-parsed body.");
+      body = req.body;
+      // Re-stringify for signature validation (Best effort)
+      // Note: This might fail strict signature validation if key order changes,
+      // but is necessary if Vercel consumes the stream.
+      bodyText = JSON.stringify(body);
+    } 
+    // Case B: Raw stream is available
+    else {
+      const rawBuffer = await getRawBody(req);
+      if (rawBuffer && rawBuffer.length > 0) {
+         bodyText = rawBuffer.toString('utf-8');
+         try {
+           body = JSON.parse(bodyText);
+         } catch(e) {
+           console.error("JSON Parse Error on raw body:", e);
+           return res.status(400).send('Invalid JSON');
+         }
+      } else {
+         console.error("Empty request body");
+         return res.status(400).send('Empty Body');
+      }
+    }
     
-    // 4. 驗證 LINE 簽章
+    // 4. Signature Validation
     const signature = req.headers['x-line-signature'];
-    
-    // 若沒有簽章頭，直接拒絕 (可能是爬蟲或測試)
     if (!signature) {
-        console.warn('Missing X-Line-Signature header');
+        console.warn('Missing X-Line-Signature');
         return res.status(401).send('Missing Signature');
     }
 
     if (!validateSignature(bodyText, process.env.CHANNEL_SECRET, signature)) {
-      console.error('Signature validation failed. Please check if CHANNEL_SECRET is correct.');
+      console.error('Signature validation failed.');
+      // NOTE: If using pre-parsed body, this might fail spuriously.
+      // However, we return 401 to be secure. If Verify fails here, check CHANNEL_SECRET.
       return res.status(401).send('Invalid Signature');
     }
 
-    // 5. 解析 JSON
-    let body;
-    try {
-      body = JSON.parse(bodyText);
-    } catch (e) {
-      console.error('JSON Parse Error:', e);
-      return res.status(400).send('Invalid JSON');
-    }
-
-    // 6. 處理 Webhook 驗證請求 (LINE Developers 後台的 Verify 按鈕)
+    // 5. Handle Webhook Verification (Eventless)
     const events = body.events;
     if (!events || !Array.isArray(events) || events.length === 0) {
-      console.log('Webhook verification successful (No events received)');
+      console.log('Webhook verification success');
       return res.status(200).send('OK');
     }
 
-    // 7. 處理訊息事件
+    // 6. Process Events
     const results = await Promise.all(events.map(async (event) => {
-      // 只回應文字訊息
       if (event.type !== 'message' || event.message.type !== 'text') {
         return Promise.resolve(null);
       }
 
       try {
-        // 檢查 API KEY
         if (!process.env.API_KEY) {
-           console.error('CRITICAL ERROR: GEMINI API_KEY is missing in Vercel Environment Variables.');
            throw new Error("API_KEY_MISSING");
         }
 
-        // 呼叫 Gemini
-        // 設定較低的 token 數與 temperature 以加快回應速度，避免 Vercel 10秒 超時
         const response = await ai.models.generateContent({
           model: 'gemini-2.5-flash',
           contents: event.message.text,
           config: {
             systemInstruction: SYSTEM_INSTRUCTION,
             temperature: 0.3,
-            maxOutputTokens: 800, // 降低 token 上限以確保速度
+            maxOutputTokens: 600, // Reduced for speed
           },
         });
 
@@ -160,32 +181,31 @@ export default async function handler(req, res) {
         });
 
       } catch (error) {
-        console.error('Processing Error:', error);
+        console.error('Gemini/Line Logic Error:', error);
         
         let errorMessage = '報告同仁，系統連線發生異常，請稍後再試。';
-        
         if (error.message === "API_KEY_MISSING") {
-            errorMessage = '報告同仁，系統管理員尚未設定 API 金鑰，請聯繫資訊人員處理。';
+            errorMessage = '報告同仁，尚未設定 API 金鑰。';
         }
 
-        // 嘗試回傳錯誤訊息給使用者 (若 ReplyToken 未過期)
+        // Attempt fallback reply
         try {
             return await client.replyMessage(event.replyToken, {
               type: 'text',
               text: errorMessage,
             });
         } catch (lineError) {
-            console.error('LINE Reply Error (Fallback):', lineError);
+            console.error('Fallback Reply Error:', lineError);
             return null;
         }
       }
     }));
 
-    // 回應 200 OK
     res.status(200).json(results);
 
   } catch (error) {
-    console.error('Webhook Handler Fatal Error:', error);
+    console.error('Fatal Handler Error:', error);
+    // Return 500, but log explicitly
     res.status(500).send('Internal Server Error');
   }
 }
