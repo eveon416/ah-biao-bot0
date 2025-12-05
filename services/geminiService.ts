@@ -34,6 +34,7 @@ export const streamResponse = async (
     const chat = ai.chats.create({
       model: model,
       config: {
+        tools: [{ googleSearch: {} }],
         systemInstruction: SYSTEM_INSTRUCTION,
         temperature: 0.3, // Lower temperature for more deterministic/professional answers
         maxOutputTokens: 2048,
