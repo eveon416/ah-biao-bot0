@@ -5,7 +5,7 @@ import Suggestions from './components/Suggestions';
 import { Message } from './types';
 import { WELCOME_MESSAGE } from './constants';
 import { streamResponse } from './services/geminiService';
-import { Send, StopCircle, RefreshCw, Eraser } from 'lucide-react';
+import { Send, RefreshCw, Eraser } from 'lucide-react';
 
 const App: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
@@ -145,7 +145,7 @@ const App: React.FC = () => {
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="請輸入您的行政問題，例如：未達公告金額採購流程..."
+              placeholder="請輸入行政或出納問題，例如：年終獎金計算、採購流程..."
               className="w-full bg-transparent border-none focus:ring-0 resize-none max-h-32 min-h-[44px] py-2.5 px-3 text-slate-700 placeholder-slate-400 text-base"
               rows={1}
               style={{ height: 'auto', minHeight: '44px' }}

@@ -16,7 +16,7 @@ const Header: React.FC = () => {
         </div>
         <div className="hidden sm:flex items-center space-x-2 text-xs text-slate-300 bg-slate-800/50 px-3 py-1.5 rounded-full border border-slate-700">
           <Scale className="w-3.5 h-3.5" />
-          <span>依法行政・專業諮詢</span>
+          <span>依法行政・薪資出納</span>
         </div>
       </div>
     </header>
