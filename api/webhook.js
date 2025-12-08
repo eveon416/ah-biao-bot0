@@ -9,6 +9,11 @@ export const config = {
   },
 };
 
+// 全域快取：用於儲存已處理過的事件 ID，防止重複回應 (Deduplication)
+// 注意：在 Vercel Serverless 中，全域變數可能在 warm start 時保留，但不保證永久持久。
+// 這可以有效減少短時間內因 Line 重試 (Retry) 造成的重複執行。
+const processedEventIds = new Map();
+
 // 系統提示詞
 const SYSTEM_INSTRUCTION = `
 **角色設定 (Role):**
@@ -80,17 +85,25 @@ const SYSTEM_INSTRUCTION = `
         *   **小額採購**：**15萬元(含)以下**。
         *   **逾公告金額十分之一**：**超過 15 萬元** (即 > 150,000 元)。
     *   **適用情境**：辦理採購金額 **超過 15 萬元** 的案件。
-    *   **必要提醒與內容大項**：請告知同仁這是會計室審核的重點，缺一不可。請務必列出以下兩份局內專屬文件及其**重點大項**，方便同仁針對大項進行更詳細的提問：
+    *   **必要提醒與內容大項**：除了一般法規外，**務必**提醒同仁注意以下兩份會計室專屬文件，並列出**內容大項**引導同仁提問：
         1.  **《花蓮縣衛生局所採購付款案會辦會計室應敘明事項及應備文件檢查表1141125》**
-            *   **重點大項**：請購程序檢核、招標/議比價文件、履約驗收文件、核銷憑證規範。
+            *   **【內容大項】**：
+                *   **請購程序檢核**：確認動支經費申請單是否核准、預算科目是否正確。
+                *   **招標/議比價文件**：檢附估價單（15萬以下至少1家，逾15萬至少3家）、比價/議價紀錄。
+                *   **履約驗收文件**：驗收紀錄、結算驗收證明書、保固切結書、交貨照片。
+                *   **核銷憑證規範**：發票/收據統編抬頭、黏貼憑證核章完整性。
         2.  **《花蓮縣衛生局所會計室辦理採購付款會辦案件審核重點1141125》**
-            *   **重點大項**：預算科目與額度控管、採購法規適用性、履約期限與罰則計算、驗收紀錄完整性、財產/非消耗品登帳。
+            *   **【內容大項】**：
+                *   **預算與法規**：預算容納是否足夠、是否符合《採購法》第22條或第49條規定。
+                *   **履約管理**：履約期限計算（日曆天/工作天）、逾期違約金計算標準。
+                *   **財產管理**：單價1萬元以上且耐用2年以上之物品需登帳財產或非消耗品。
+                *   **各類所得扣繳**：薪資、執行業務所得等是否已扣取稅款及二代健保。
 
 **回答準則:**
-1.  **查證與引用**：請優先參考上述知識庫，並**必須使用 Google 搜尋**驗證法規條號。回答時請明確列出來源。
+1.  **查證與引用**：請優先參考上述知識庫，並**必須使用 Google 搜尋**驗證法規條號。
 2.  **精準計算**：針對「年中退休/離職」案例，務必套用「當月有在職即算全月」之規則。
-3.  **採購金額判斷**：務必依據**15萬元**作為小額採購與逾公告金額十分之一的分界點。
-4.  **局所專屬提醒**：若同仁詢問 **超過15萬元** 的採購案，必須主動列出上述第6點的花蓮縣衛生局專屬檢查表與審核重點之「文件名稱」與「內容大項」。
+3.  **採購金額判斷**：嚴格依據 **15萬元** 作為小額採購（<=15萬）與逾公告金額十分之一（>15萬）的分界。
+4.  **局所專屬提醒**：若同仁詢問 **超過15萬元** 的採購案，必須主動列出上述第6點的兩份專屬文件及其「內容大項」。
 5.  **風險提示**：若使用者的做法可能違規，請嚴肅提醒。
 `;
 
@@ -152,7 +165,28 @@ export default async function handler(req, res) {
         return res.status(401).json({ message: 'Missing Signature' });
     }
 
-    // 5. 處理「Verify」請求
+    // 5. 事件防呆與重複檢查 (Deduplication)
+    // Line 平台在 webhook timeout (預設約 60秒) 或發生錯誤時會進行重試 (Retry)。
+    // 重試的事件會有相同的 webhookEventId。透過檢查此 ID，我們可以忽略重複的請求。
+    const webhookEventId = bodyObj.webhookEventId;
+    if (webhookEventId) {
+        const lastSeen = processedEventIds.get(webhookEventId);
+        // 如果這個 ID 已經在過去 60 秒內處理過，則視為重複請求並忽略
+        if (lastSeen && (Date.now() - lastSeen < 60000)) {
+            console.log(`Duplicate event detected: ${webhookEventId}. Skipping processing to avoid double reply.`);
+            return res.status(200).json({ message: 'Duplicate event ignored' });
+        }
+        
+        // 清理過期的 ID (保留5分鐘以內的紀錄)
+        const now = Date.now();
+        for (const [id, time] of processedEventIds) {
+            if (now - time > 300000) processedEventIds.delete(id);
+        }
+        
+        // 紀錄新的 Event ID
+        processedEventIds.set(webhookEventId, now);
+    }
+
     const events = bodyObj.events;
     if (!events || !Array.isArray(events) || events.length === 0) {
       console.log('Webhook Verification Successful (No events to process)');
@@ -179,11 +213,8 @@ export default async function handler(req, res) {
       const sourceType = event.source.type; // 'user', 'group', or 'room'
 
       // 【群組過濾機制】
-      // 如果是在群組(group)或多人聊天室(room)
       if (sourceType === 'group' || sourceType === 'room') {
-        // 檢查訊息是否包含呼叫關鍵字「阿標」
         if (!userMessage.includes('阿標')) {
-            // 如果沒叫阿標，就已讀不回，避免打擾群組對話
             return Promise.resolve(null);
         }
       }
@@ -197,7 +228,7 @@ export default async function handler(req, res) {
 
         const response = await ai.models.generateContent({
           model: 'gemini-2.5-flash',
-          contents: userMessage, // 直接將使用者訊息送給 AI，包含「阿標」二字也沒關係，AI 知道這是他的名字
+          contents: userMessage, 
           config: {
             // 加入 Google Search Tool
             tools: [{ googleSearch: {} }],
@@ -228,8 +259,6 @@ export default async function handler(req, res) {
       } catch (innerError) {
         console.error('Event Processing Error:', innerError);
         
-        // 在群組中如果發生錯誤，通常選擇保持安靜，除非是嚴重的系統設定錯誤，
-        // 這裡為了除錯方便，若是私訊則回報錯誤，群組則視情況回報
         let errorMsg = '報告同仁，系統連線發生異常，請稍後再試。';
         
         if (innerError.message === 'API_KEY_MISSING') {
