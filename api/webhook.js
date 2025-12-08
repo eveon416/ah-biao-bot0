@@ -230,9 +230,13 @@ export default async function handler(req, res) {
 
         // 【記憶功能實作】
         // 1. 嘗試從快取中取得該使用者的歷史對話
-        // 若是群組對話，我們這裡使用 userId 來做個人化記憶 (也可以改成 groupId)
         const sessionKey = userId || 'unknown';
-        const history = userSessions.get(sessionKey) || [];
+        // 使用 map 來確保 deep copy 歷史紀錄，避免 SDK 內部參考造成狀態汙染
+        const rawHistory = userSessions.get(sessionKey) || [];
+        const history = rawHistory.map(item => ({
+             role: item.role,
+             parts: item.parts.map(p => ({ text: p.text }))
+        }));
 
         // 2. 建立 Chat Session，傳入歷史紀錄
         const chat = ai.chats.create({
@@ -253,25 +257,30 @@ export default async function handler(req, res) {
         });
 
         // 3. 發送訊息 (Chat 模式)
+        // 注意：result 是 GenerateContentResponse 物件，直接存取 .text
         const result = await chat.sendMessage({ message: userMessage });
-        let replyText = result.response.text; // Chat 模式直接取得回應文字
+        let replyText = result.text; 
         
         if (!replyText) {
              console.warn("Gemini response text is empty.");
-             replyText = "報告同仁，阿標剛才分神了（回應內容為空），請您再複述一次問題。";
+             // 嘗試檢查是否有搜尋結果但沒文字 (雖不常見)
+             if (result.candidates?.[0]?.groundingMetadata) {
+                 replyText = "報告同仁，相關資料已檢索完畢，請您確認連結（但系統未生成摘要文字）。";
+             } else {
+                 replyText = "報告同仁，阿標剛才分神了（回應內容為空），請您再複述一次問題。";
+             }
         }
 
         // 4. 更新歷史紀錄
-        // 我們手動維護歷史紀錄，避免 chat 物件重置後資料遺失
-        // 限制保留最近 10 輪對話 (20 則訊息)，避免 Token 爆量
         const newExchange = [
             { role: 'user', parts: [{ text: userMessage }] },
             { role: 'model', parts: [{ text: replyText }] }
         ];
         
-        const updatedHistory = [...history, ...newExchange];
+        const updatedHistory = [...rawHistory, ...newExchange];
+        // 保持最近 20 則訊息 (10輪對話)
         if (updatedHistory.length > 20) {
-            updatedHistory.splice(0, updatedHistory.length - 20); // 刪除舊的
+            updatedHistory.splice(0, updatedHistory.length - 20); 
         }
         userSessions.set(sessionKey, updatedHistory);
 
