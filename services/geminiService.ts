@@ -24,10 +24,13 @@ export const streamResponse = async (
   onChunk: (text: string) => void
 ): Promise<string> => {
   try {
-    // We create a "fresh" chat session logically for each turn in this simple architecture,
-    // or we could maintain a chat object. To ensure the system instruction is always strict,
-    // we re-initialize the config here.
+    // 修正歷史紀錄邏輯：
+    // currentHistory 包含了 [過去的對話..., 最新這則使用者訊息]
+    // 但 ai.chats.create 的 history 參數只應該包含 [過去的對話]
+    // 最新的訊息會透過 sendMessageStream 傳送，否則 AI 會以為使用者重複講了兩次一樣的話。
     
+    const historyMessages = currentHistory.slice(0, -1); // 排除最後一則（即當前的 userMessage）
+
     // Using the 'gemini-2.5-flash' model for speed and accuracy in reasoning.
     const model = 'gemini-2.5-flash';
 
@@ -39,7 +42,7 @@ export const streamResponse = async (
         temperature: 0.3, // Lower temperature for more deterministic/professional answers
         maxOutputTokens: 2048,
       },
-      history: formatHistory(currentHistory),
+      history: formatHistory(historyMessages),
     });
 
     const result = await chat.sendMessageStream({ message: userMessage });

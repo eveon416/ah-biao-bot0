@@ -9,10 +9,14 @@ export const config = {
   },
 };
 
-// 全域快取：用於儲存已處理過的事件 ID，防止重複回應 (Deduplication)
-// 注意：在 Vercel Serverless 中，全域變數可能在 warm start 時保留，但不保證永久持久。
-// 這可以有效減少短時間內因 Line 重試 (Retry) 造成的重複執行。
+// 全域快取：用於儲存已處理過的事件 ID (防止重複回應)
 const processedEventIds = new Map();
+
+// 【新增】對話紀錄快取：用於儲存使用者的歷史對話 (記憶功能)
+// Key: userId, Value: Array of content parts
+// 注意：在 Serverless 環境中，此變數在冷啟動 (Cold Start) 時會重置。
+// 若需永久記憶，需連接外部資料庫 (如 Redis, Firebase)。
+const userSessions = new Map();
 
 // 系統提示詞
 const SYSTEM_INSTRUCTION = `
@@ -171,24 +175,17 @@ export default async function handler(req, res) {
     }
 
     // 5. 事件防呆與重複檢查 (Deduplication)
-    // Line 平台在 webhook timeout (預設約 60秒) 或發生錯誤時會進行重試 (Retry)。
-    // 重試的事件會有相同的 webhookEventId。透過檢查此 ID，我們可以忽略重複的請求。
     const webhookEventId = bodyObj.webhookEventId;
     if (webhookEventId) {
         const lastSeen = processedEventIds.get(webhookEventId);
-        // 如果這個 ID 已經在過去 60 秒內處理過，則視為重複請求並忽略
         if (lastSeen && (Date.now() - lastSeen < 60000)) {
-            console.log(`Duplicate event detected: ${webhookEventId}. Skipping processing to avoid double reply.`);
+            console.log(`Duplicate event detected: ${webhookEventId}. Skipping.`);
             return res.status(200).json({ message: 'Duplicate event ignored' });
         }
-        
-        // 清理過期的 ID (保留5分鐘以內的紀錄)
         const now = Date.now();
         for (const [id, time] of processedEventIds) {
             if (now - time > 300000) processedEventIds.delete(id);
         }
-        
-        // 紀錄新的 Event ID
         processedEventIds.set(webhookEventId, now);
     }
 
@@ -204,7 +201,6 @@ export default async function handler(req, res) {
       channelSecret: process.env.CHANNEL_SECRET,
     });
     
-    // 檢查 API KEY
     const apiKey = process.env.API_KEY;
     
     // 7. 處理所有事件
@@ -216,6 +212,7 @@ export default async function handler(req, res) {
 
       const userMessage = event.message.text;
       const sourceType = event.source.type; // 'user', 'group', or 'room'
+      const userId = event.source.userId;
 
       // 【群組過濾機制】
       if (sourceType === 'group' || sourceType === 'room') {
@@ -231,11 +228,17 @@ export default async function handler(req, res) {
         
         const ai = new GoogleGenAI({ apiKey: apiKey });
 
-        const response = await ai.models.generateContent({
+        // 【記憶功能實作】
+        // 1. 嘗試從快取中取得該使用者的歷史對話
+        // 若是群組對話，我們這裡使用 userId 來做個人化記憶 (也可以改成 groupId)
+        const sessionKey = userId || 'unknown';
+        const history = userSessions.get(sessionKey) || [];
+
+        // 2. 建立 Chat Session，傳入歷史紀錄
+        const chat = ai.chats.create({
           model: 'gemini-2.5-flash',
-          contents: userMessage, 
+          history: history,
           config: {
-            // 加入 Google Search Tool
             tools: [{ googleSearch: {} }],
             systemInstruction: SYSTEM_INSTRUCTION,
             temperature: 0.3,
@@ -249,12 +252,28 @@ export default async function handler(req, res) {
           },
         });
 
-        let replyText = response.text;
+        // 3. 發送訊息 (Chat 模式)
+        const result = await chat.sendMessage({ message: userMessage });
+        let replyText = result.response.text; // Chat 模式直接取得回應文字
         
         if (!replyText) {
              console.warn("Gemini response text is empty.");
              replyText = "報告同仁，阿標剛才分神了（回應內容為空），請您再複述一次問題。";
         }
+
+        // 4. 更新歷史紀錄
+        // 我們手動維護歷史紀錄，避免 chat 物件重置後資料遺失
+        // 限制保留最近 10 輪對話 (20 則訊息)，避免 Token 爆量
+        const newExchange = [
+            { role: 'user', parts: [{ text: userMessage }] },
+            { role: 'model', parts: [{ text: replyText }] }
+        ];
+        
+        const updatedHistory = [...history, ...newExchange];
+        if (updatedHistory.length > 20) {
+            updatedHistory.splice(0, updatedHistory.length - 20); // 刪除舊的
+        }
+        userSessions.set(sessionKey, updatedHistory);
 
         await client.replyMessage(event.replyToken, {
           type: 'text',
