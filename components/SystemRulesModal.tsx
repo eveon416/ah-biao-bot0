@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Shield, AlertTriangle, Scale, BookOpen, CheckCircle2 } from 'lucide-react';
+import { X, Shield, AlertTriangle, Scale, BookOpen, CheckCircle2, Database, FileText } from 'lucide-react';
 
 interface SystemRulesModalProps {
   isOpen: boolean;
@@ -42,62 +42,48 @@ const SystemRulesModal: React.FC<SystemRulesModalProps> = ({ isOpen, onClose }) 
             </p>
           </section>
 
-          {/* Section 2: Critical Rules */}
+          {/* Section 2: Priority Rules */}
           <section>
             <h3 className="flex items-center gap-2 font-bold text-slate-900 mb-3 text-lg border-b pb-1">
-              <AlertTriangle className="w-5 h-5 text-amber-500" />
-              最高指導原則：版本控制與仲裁
+              <Database className="w-5 h-5 text-indigo-600" />
+              資料引用優先順序
             </h3>
             <div className="space-y-3 text-sm">
               <div className="flex gap-3">
-                <div className="min-w-[4px] bg-amber-500 rounded-full"></div>
-                <div>
-                  <strong className="block text-slate-900">衝突仲裁機制</strong>
-                  <p>若內部知識庫檔案日期較舊，但網路搜尋發現法規已修法，<span className="text-red-600 font-bold">強制引用最新搜尋結果</span>，並警示使用者。</p>
-                </div>
+                 <div className="flex flex-col items-center">
+                    <div className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-bold">1</div>
+                    <div className="h-full w-0.5 bg-indigo-200 my-1"></div>
+                 </div>
+                 <div className="pb-4">
+                   <strong className="block text-slate-900 text-base">內建知識庫 (Internal Knowledge)</strong>
+                   <p className="text-slate-600">系統內建之採購門檻、公文規範及使用者提供之五份關鍵內部文件為第一優先引用來源。</p>
+                 </div>
               </div>
               <div className="flex gap-3">
-                <div className="min-w-[4px] bg-amber-500 rounded-full"></div>
-                <div>
-                  <strong className="block text-slate-900">數據雙重查核</strong>
-                  <p>針對「金額門檻」、「薪資標準」、「罰則數字」，回答前<span className="text-red-600 font-bold">強制執行 Google Search</span> 雙重確認。</p>
-                </div>
-              </div>
-              <div className="flex gap-3">
-                <div className="min-w-[4px] bg-amber-500 rounded-full"></div>
-                <div>
-                  <strong className="block text-slate-900">網域限制</strong>
-                  <p>僅引用 <code>.gov.tw</code> 政府官方網站資訊，嚴禁引用部落格或懶人包。</p>
-                </div>
+                 <div className="flex flex-col items-center">
+                    <div className="w-6 h-6 rounded-full bg-emerald-500 text-white flex items-center justify-center text-xs font-bold">2</div>
+                 </div>
+                 <div>
+                   <strong className="block text-slate-900 text-base">外部法規查核 (Official Search)</strong>
+                   <p className="text-slate-600">輔助驗證。僅在搜尋結果明確指出「法規已修法/廢止」時，才可覆寫內部資料。</p>
+                 </div>
               </div>
             </div>
           </section>
 
-          {/* Section 3: Knowledge Base */}
+          {/* Section 3: Conflict Resolution */}
           <section>
-            <h3 className="flex items-center gap-2 font-bold text-slate-900 mb-3 text-lg border-b pb-1">
-              <Scale className="w-5 h-5 text-indigo-500" />
-              內建採購金額基準 (112.01.01)
+             <h3 className="flex items-center gap-2 font-bold text-slate-900 mb-3 text-lg border-b pb-1">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              衝突仲裁機制
             </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-              <div className="bg-indigo-50 p-3 rounded border border-indigo-100">
-                <span className="block text-xs text-indigo-600 mb-1">工程 / 財物採購</span>
-                <span className="font-bold text-slate-800">查核金額：5,000 萬元</span>
-              </div>
-              <div className="bg-indigo-50 p-3 rounded border border-indigo-100">
-                <span className="block text-xs text-indigo-600 mb-1">勞務採購</span>
-                <span className="font-bold text-slate-800">查核金額：1,000 萬元</span>
-              </div>
-              <div className="bg-emerald-50 p-3 rounded border border-emerald-100">
-                <span className="block text-xs text-emerald-600 mb-1">公告金額</span>
-                <span className="font-bold text-slate-800">150 萬元</span>
-              </div>
-              <div className="bg-emerald-50 p-3 rounded border border-emerald-100">
-                <span className="block text-xs text-emerald-600 mb-1">中央機關小額採購</span>
-                <span className="font-bold text-slate-800">15 萬元以下</span>
-                <span className="text-xs text-slate-500 ml-1">(得逕洽廠商)</span>
-              </div>
-            </div>
+             <div className="bg-amber-50 p-3 rounded border border-amber-100 text-sm">
+                <p className="mb-2">當<strong>內建資料</strong>與<strong>網路搜尋結果</strong>不一致時：</p>
+                <ul className="list-disc pl-5 space-y-1 text-slate-700">
+                    <li>若網路資訊顯示法規已於<strong>更晚日期</strong>修正，則以最新法規為準，並提示使用者。</li>
+                    <li>若網路資訊模糊或非官方來源，則<strong>堅持使用內建知識庫</strong>數據。</li>
+                </ul>
+             </div>
           </section>
 
            {/* Section 4: Response Format */}
