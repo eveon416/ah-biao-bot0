@@ -1,7 +1,11 @@
 import React from 'react';
-import { Building2, Scale } from 'lucide-react';
+import { Building2, Scale, BookOpen } from 'lucide-react';
 
-const Header: React.FC = () => {
+interface HeaderProps {
+  onOpenRules?: () => void;
+}
+
+const Header: React.FC<HeaderProps> = ({ onOpenRules }) => {
   return (
     <header className="bg-gradient-to-r from-slate-900 to-slate-800 text-white shadow-md z-10 sticky top-0">
       <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
@@ -14,9 +18,21 @@ const Header: React.FC = () => {
             <p className="text-xs text-slate-300 font-light tracking-wider">GOVERNMENT ADMINISTRATION ASSISTANT AI</p>
           </div>
         </div>
-        <div className="hidden sm:flex items-center space-x-2 text-xs text-slate-300 bg-slate-800/50 px-3 py-1.5 rounded-full border border-slate-700">
-          <Scale className="w-3.5 h-3.5" />
-          <span>依法行政・薪資出納</span>
+        
+        <div className="flex items-center gap-3">
+          <button 
+            onClick={onOpenRules}
+            className="flex items-center space-x-1.5 text-xs text-slate-200 bg-slate-700/50 hover:bg-slate-700 px-3 py-1.5 rounded-full border border-slate-600 transition-all hover:border-slate-400 active:scale-95"
+            title="檢視系統作業準則"
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">作業準則</span>
+          </button>
+
+          <div className="hidden md:flex items-center space-x-2 text-xs text-slate-300 bg-slate-800/50 px-3 py-1.5 rounded-full border border-slate-700">
+            <Scale className="w-3.5 h-3.5" />
+            <span>依法行政・薪資出納</span>
+          </div>
         </div>
       </div>
     </header>

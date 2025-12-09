@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Header from './components/Header';
 import ChatBubble from './components/ChatBubble';
 import Suggestions from './components/Suggestions';
+import SystemRulesModal from './components/SystemRulesModal';
 import { Message } from './types';
 import { WELCOME_MESSAGE } from './constants';
 import { streamResponse } from './services/geminiService';
@@ -18,6 +19,7 @@ const App: React.FC = () => {
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isRulesOpen, setIsRulesOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -106,7 +108,9 @@ const App: React.FC = () => {
 
   return (
     <div className="flex flex-col h-screen bg-slate-50">
-      <Header />
+      <Header onOpenRules={() => setIsRulesOpen(true)} />
+      
+      <SystemRulesModal isOpen={isRulesOpen} onClose={() => setIsRulesOpen(false)} />
 
       <main className="flex-1 overflow-hidden flex flex-col relative max-w-5xl w-full mx-auto bg-white shadow-2xl md:my-4 md:rounded-xl md:border border-slate-200">
         
