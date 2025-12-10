@@ -1,12 +1,13 @@
 import React from 'react';
-import { Building2, Scale, BookOpen, Database } from 'lucide-react';
+import { Building2, Scale, BookOpen, Database, CalendarClock } from 'lucide-react';
 
 interface HeaderProps {
   onOpenRules?: () => void;
   onOpenFiles?: () => void;
+  onOpenSchedule?: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ onOpenRules, onOpenFiles }) => {
+const Header: React.FC<HeaderProps> = ({ onOpenRules, onOpenFiles, onOpenSchedule }) => {
   return (
     <header className="bg-gradient-to-r from-slate-900 to-slate-800 text-white shadow-md z-10 sticky top-0">
       <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
@@ -21,6 +22,15 @@ const Header: React.FC<HeaderProps> = ({ onOpenRules, onOpenFiles }) => {
         </div>
         
         <div className="flex items-center gap-2 sm:gap-3">
+           <button 
+            onClick={onOpenSchedule}
+            className="flex items-center space-x-1.5 text-xs text-emerald-100 bg-emerald-800/50 hover:bg-emerald-700 px-3 py-1.5 rounded-full border border-emerald-500 transition-all hover:border-emerald-400 active:scale-95"
+            title="查閱系統自動排程"
+          >
+            <CalendarClock className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">排程管理</span>
+          </button>
+
            <button 
             onClick={onOpenFiles}
             className="flex items-center space-x-1.5 text-xs text-indigo-100 bg-indigo-800/50 hover:bg-indigo-700 px-3 py-1.5 rounded-full border border-indigo-500 transition-all hover:border-indigo-400 active:scale-95"
@@ -38,11 +48,6 @@ const Header: React.FC<HeaderProps> = ({ onOpenRules, onOpenFiles }) => {
             <BookOpen className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">作業準則</span>
           </button>
-
-          <div className="hidden md:flex items-center space-x-2 text-xs text-slate-300 bg-slate-800/50 px-3 py-1.5 rounded-full border border-slate-700">
-            <Scale className="w-3.5 h-3.5" />
-            <span>依法行政・薪資出納</span>
-          </div>
         </div>
       </div>
     </header>

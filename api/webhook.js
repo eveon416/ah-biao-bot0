@@ -13,7 +13,7 @@ export const config = {
 const processedEventIds = new Map();
 const userSessions = new Map();
 
-// 系統提示詞 (修正版：嚴格禁止 Markdown，使用 LINE 官方風格)
+// 系統提示詞
 const SYSTEM_INSTRUCTION = `
 **角色設定 (Role):**
 你是一位在台灣政府機關服務超過 20 年的「資深行政主管」，大家都尊稱你為「阿標」。你對公務體系的運作瞭若指掌，特別精通《政府採購法》、《文書處理手冊》、《機關檔案管理作業手冊》。你的個性沉穩、剛正不阿，但對待同仁（使用者）非常熱心，總是不厭其煩地指導後進。
@@ -66,29 +66,32 @@ const SYSTEM_INSTRUCTION = `
 (免責聲明：本系統由 AI 輔助生成，僅供參考)
 `;
 
-// 輔助函式：計算輪值人員 (與 Cron Job 邏輯同步)
-function getDutyPerson() {
+// 輔助函式：計算輪值人員 (支援指定日期)
+function getDutyPerson(targetDate = new Date()) {
     const staffList = [
       '林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰',
       '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'
     ];
+    // 設定錨點：2025-12-08 (週一) -> Index 6 (陳怡妗)
     const anchorDate = new Date('2025-12-08T00:00:00+08:00'); 
     const anchorIndex = 6;
-    const now = new Date();
-    const taiwanNow = new Date(now.getTime() + (8 * 60 * 60 * 1000));
+    
+    const taiwanTarget = new Date(targetDate.getTime() + (8 * 60 * 60 * 1000));
     const oneWeekMs = 604800000;
-    const diffTime = taiwanNow.getTime() - anchorDate.getTime();
+    
+    const diffTime = taiwanTarget.getTime() - anchorDate.getTime();
     const diffWeeks = Math.floor(diffTime / oneWeekMs);
+    
     let targetIndex = (anchorIndex + diffWeeks) % staffList.length;
     if (targetIndex < 0) targetIndex = targetIndex + staffList.length;
     return staffList[targetIndex];
 }
 
 // 輔助函式：產生 Flex Message
-function createAnnouncementFlex(dutyPerson) {
+function createAnnouncementFlex(dutyPerson, dateLabel = "本週") {
     return {
       type: 'flex',
-      altText: `📢 行政科週知：本週輪值 ${dutyPerson}`,
+      altText: `📢 行政科週知：${dateLabel}輪值 ${dutyPerson}`,
       contents: {
         type: "bubble",
         size: "giga",
@@ -98,7 +101,7 @@ function createAnnouncementFlex(dutyPerson) {
           backgroundColor: "#1e293b",
           paddingAll: "lg",
           contents: [
-            { type: "text", text: "📢 行政科週知", color: "#ffffff", weight: "bold", size: "lg" }
+            { type: "text", text: "📢 科務會議輪值", color: "#ffffff", weight: "bold", size: "lg" }
           ]
         },
         body: {
@@ -107,7 +110,13 @@ function createAnnouncementFlex(dutyPerson) {
           spacing: "md",
           contents: [
             { type: "text", text: "報告同仁早安 ☀️", color: "#64748b", size: "sm" },
-            { type: "text", text: "本週科務會議輪值紀錄為：", color: "#334155", size: "md", weight: "bold" },
+            { 
+                type: "text", 
+                text: `${dateLabel}科務會議輪值人員：`, 
+                color: "#334155", 
+                size: "md", 
+                weight: "bold" 
+            },
             { type: "separator", color: "#cbd5e1" },
             { type: "text", text: dutyPerson, size: "3xl", weight: "bold", color: "#ef4444", align: "center", margin: "lg" },
             { type: "separator", color: "#cbd5e1", margin: "lg" },
@@ -123,7 +132,7 @@ function createAnnouncementFlex(dutyPerson) {
                 { type: "text", text: "彙整陳核用印 🈳", color: "#64748b", size: "sm", margin: "none" }
               ]
             },
-            { type: "text", text: "辛苦了，祝本週工作順心！💪✨", margin: "xl", size: "xs", color: "#94a3b8", align: "center" }
+            { type: "text", text: "辛苦了，祝工作順心！💪✨", margin: "xl", size: "xs", color: "#94a3b8", align: "center" }
           ]
         }
       }
@@ -242,15 +251,30 @@ export default async function handler(req, res) {
         }
       }
 
-      // 3. 特殊功能：手動觸發週一會議公告 (攔截並直接發送 Flex Message)
-      if (userMessage.includes('週一會議公告') || userMessage.includes('產生公告') || userMessage.includes('查詢輪值')) {
+      // 3. 特殊功能：攔截「輪值」或「公告」相關關鍵字，強制回傳 Flex Message
+      if (userMessage.includes('週一會議公告') || userMessage.includes('產生公告') || userMessage.includes('輪值') || userMessage.includes('誰')) {
           try {
-             const dutyPerson = getDutyPerson();
-             const flexMsg = createAnnouncementFlex(dutyPerson);
+             let targetDate = new Date();
+             let dateLabel = "本週";
+
+             // 日期邏輯解析
+             if (userMessage.includes('下下週') || userMessage.includes('下下周')) {
+                 targetDate.setDate(targetDate.getDate() + 14);
+                 dateLabel = "下下週";
+             } else if (userMessage.includes('下週') || userMessage.includes('下周')) {
+                 targetDate.setDate(targetDate.getDate() + 7);
+                 dateLabel = "下週";
+             } else if (userMessage.includes('上週') || userMessage.includes('上周')) {
+                 targetDate.setDate(targetDate.getDate() - 7);
+                 dateLabel = "上週";
+             }
+
+             const dutyPerson = getDutyPerson(targetDate);
+             const flexMsg = createAnnouncementFlex(dutyPerson, dateLabel);
              await client.replyMessage(event.replyToken, flexMsg);
              return; // 處理完畢，不需經過 Gemini
           } catch (e) {
-             console.error("Manual Flex Generation Error:", e);
+             console.error("Flex Generation Error:", e);
              // 若出錯則往下繼續交給 Gemini 處理
           }
       }
@@ -316,7 +340,6 @@ export default async function handler(req, res) {
         console.error('Event Processing Error:', innerError.message, innerError.stack); 
         
         let errorMsg = '報告同仁，系統連線發生異常，請稍後再試。';
-        // (Error handling logic kept same as before)
         if (innerError.message === 'API_KEY_MISSING') errorMsg = '報告同仁，系統未設定 API 金鑰。';
         else if (innerError.message.includes('RESOURCE_EXHAUSTED')) errorMsg = '報告同仁，服務忙碌中，請稍候再試。';
 

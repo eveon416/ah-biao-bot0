@@ -4,6 +4,7 @@ import ChatBubble from './components/ChatBubble';
 import Suggestions from './components/Suggestions';
 import SystemRulesModal from './components/SystemRulesModal';
 import ReferenceFilesModal from './components/ReferenceFilesModal';
+import ScheduleModal from './components/ScheduleModal';
 import { Message } from './types';
 import { WELCOME_MESSAGE } from './constants';
 import { streamResponse } from './services/geminiService';
@@ -22,6 +23,7 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isRulesOpen, setIsRulesOpen] = useState(false);
   const [isFilesOpen, setIsFilesOpen] = useState(false);
+  const [isScheduleOpen, setIsScheduleOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -113,10 +115,12 @@ const App: React.FC = () => {
       <Header 
         onOpenRules={() => setIsRulesOpen(true)} 
         onOpenFiles={() => setIsFilesOpen(true)}
+        onOpenSchedule={() => setIsScheduleOpen(true)}
       />
       
       <SystemRulesModal isOpen={isRulesOpen} onClose={() => setIsRulesOpen(false)} />
       <ReferenceFilesModal isOpen={isFilesOpen} onClose={() => setIsFilesOpen(false)} />
+      <ScheduleModal isOpen={isScheduleOpen} onClose={() => setIsScheduleOpen(false)} />
 
       <main className="flex-1 overflow-hidden flex flex-col relative max-w-5xl w-full mx-auto bg-white shadow-2xl md:my-4 md:rounded-xl md:border border-slate-200">
         
