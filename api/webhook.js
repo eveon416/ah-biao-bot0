@@ -12,10 +12,7 @@ export const config = {
 // 全域快取：用於儲存已處理過的事件 ID (防止重複回應)
 const processedEventIds = new Map();
 
-// 【新增】對話紀錄快取：用於儲存使用者的歷史對話 (記憶功能)
-// Key: userId, Value: Array of content parts
-// 注意：在 Serverless 環境中，此變數在冷啟動 (Cold Start) 時會重置。
-// 若需永久記憶，需連接外部資料庫 (如 Redis, Firebase)。
+// 對話紀錄快取
 const userSessions = new Map();
 
 // 系統提示詞
@@ -68,19 +65,20 @@ const SYSTEM_INSTRUCTION = `
 ---
 *(免責聲明：本系統由 AI 輔助生成，僅供行政作業參考，重大決策請依正式公文程序請示上級。)*
 
-**【語氣與態度 (Tone)】**
-*   **專業權威**：站在督導立場，語氣客觀、堅定。
-*   **公文用語**：使用標準行政用語（如：得否、應、擬請），避免過度口語化。
-*   **教育性質**：不僅給答案，還要教導正確的行政邏輯，避免下級單位重複詢問相同問題。
+**【特殊指令：週一會議公告】**
+若使用者要求「產生週一會議公告」或類似請求，請**直接輸出**以下內容模板，不需包含上述的標準回答結構：
+
+📢 **【行政科週知】**
+報告同仁早安 ☀️，本週科務會議輪值紀錄為 **[請輸入人員姓名]**。
+煩請各位於 **週二下班前** 完成工作日誌 📝，俾利輪值同仁於 **週三** 彙整陳核用印 🈳。
+辛苦了，祝本週工作順心！💪✨
 `;
 
 export default async function handler(req, res) {
-  // 1. 只允許 POST
   if (req.method !== 'POST') {
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
 
-  // 2. 嚴格檢查環境變數
   if (!process.env.CHANNEL_SECRET || !process.env.CHANNEL_ACCESS_TOKEN) {
     console.error('CRITICAL ERROR: LINE Channel Secret or Access Token is missing.');
     return res.status(500).json({ message: 'Server Configuration Error: Missing Env Vars' });
@@ -90,7 +88,6 @@ export default async function handler(req, res) {
     let bodyText = '';
     let bodyObj = null;
 
-    // 3. 智慧讀取 Body
     if (req.body && typeof req.body === 'object') {
       bodyObj = req.body;
       try {
@@ -120,7 +117,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // 4. 驗證 LINE 簽章
     const signature = req.headers['x-line-signature'];
     if (signature) {
       if (!validateSignature(bodyText, process.env.CHANNEL_SECRET, signature)) {
@@ -132,7 +128,6 @@ export default async function handler(req, res) {
         return res.status(401).json({ message: 'Missing Signature' });
     }
 
-    // 5. 事件防呆與重複檢查 (Deduplication)
     const webhookEventId = bodyObj.webhookEventId;
     if (webhookEventId) {
         const lastSeen = processedEventIds.get(webhookEventId);
@@ -153,7 +148,6 @@ export default async function handler(req, res) {
       return res.status(200).json({ message: 'OK' });
     }
 
-    // 6. 初始化 Clients
     const client = new Client({
       channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
       channelSecret: process.env.CHANNEL_SECRET,
@@ -161,18 +155,35 @@ export default async function handler(req, res) {
     
     const apiKey = process.env.API_KEY;
     
-    // 7. 處理所有事件
     await Promise.all(events.map(async (event) => {
-      // 只處理文字訊息
       if (event.type !== 'message' || event.message.type !== 'text') {
         return Promise.resolve(null);
       }
 
-      const userMessage = event.message.text;
-      const sourceType = event.source.type; // 'user', 'group', or 'room'
+      const userMessage = event.message.text.trim();
+      const sourceType = event.source.type; 
       const userId = event.source.userId;
+      const groupId = event.source.groupId;
+      const roomId = event.source.roomId;
 
-      // 【群組過濾機制】
+      // 【特殊功能：查詢群組 ID】
+      // 這是為了設定自動推播(Cron Job)所需的環境變數
+      // 修改：使用 includes 以支援「阿標 查詢群組ID」或「請查詢群組ID」等語句
+      if (userMessage.includes('查詢群組ID') || userMessage.includes('查詢群組id')) {
+          let idInfo = '';
+          if (groupId) idInfo = `群組 ID (Group ID): ${groupId}`;
+          else if (roomId) idInfo = `聊天室 ID (Room ID): ${roomId}`;
+          else idInfo = `使用者 ID (User ID): ${userId}`;
+
+          const replyMsg = `報告長官，本聊天室的識別碼如下：\n\n${idInfo}\n\n請將此 ID 設定至環境變數 LINE_GROUP_ID 以啟用每週自動公告功能。`;
+          
+          await client.replyMessage(event.replyToken, {
+              type: 'text',
+              text: replyMsg
+          });
+          return;
+      }
+
       if (sourceType === 'group' || sourceType === 'room') {
         if (!userMessage.includes('阿標')) {
             return Promise.resolve(null);
@@ -186,17 +197,13 @@ export default async function handler(req, res) {
         
         const ai = new GoogleGenAI({ apiKey: apiKey });
 
-        // 【記憶功能實作】
-        // 1. 嘗試從快取中取得該使用者的歷史對話
         const sessionKey = userId || 'unknown';
-        // 使用 map 來確保 deep copy 歷史紀錄，避免 SDK 內部參考造成狀態汙染
         const rawHistory = userSessions.get(sessionKey) || [];
         const history = rawHistory.map(item => ({
              role: item.role,
              parts: item.parts.map(p => ({ text: p.text }))
         }));
 
-        // 2. 建立 Chat Session，傳入歷史紀錄
         const chat = ai.chats.create({
           model: 'gemini-2.5-flash',
           history: history,
@@ -214,14 +221,11 @@ export default async function handler(req, res) {
           },
         });
 
-        // 3. 發送訊息 (Chat 模式)
-        // 注意：result 是 GenerateContentResponse 物件，直接存取 .text
         const result = await chat.sendMessage({ message: userMessage });
         let replyText = result.text; 
         
         if (!replyText) {
              console.warn("Gemini response text is empty.");
-             // 嘗試檢查是否有搜尋結果但沒文字 (雖不常見)
              if (result.candidates?.[0]?.groundingMetadata) {
                  replyText = "報告同仁，相關資料已檢索完畢，請您確認連結（但系統未生成摘要文字）。";
              } else {
@@ -229,14 +233,12 @@ export default async function handler(req, res) {
              }
         }
 
-        // 4. 更新歷史紀錄
         const newExchange = [
             { role: 'user', parts: [{ text: userMessage }] },
             { role: 'model', parts: [{ text: replyText }] }
         ];
         
         const updatedHistory = [...rawHistory, ...newExchange];
-        // 保持最近 20 則訊息 (10輪對話)
         if (updatedHistory.length > 20) {
             updatedHistory.splice(0, updatedHistory.length - 20); 
         }
@@ -248,9 +250,9 @@ export default async function handler(req, res) {
         });
 
       } catch (innerError) {
-        console.error('Event Processing Error:', innerError.message, innerError.stack); // Enhanced logging
+        console.error('Event Processing Error:', innerError.message, innerError.stack); 
         
-        let errorMsg = '報告同仁，系統連線發生異常，請稍後再試。'; // Default generic error
+        let errorMsg = '報告同仁，系統連線發生異常，請稍後再試。';
 
         if (innerError.message === 'API_KEY_MISSING') {
             errorMsg = '報告同仁，系統未設定 API 金鑰，請檢查環境變數。';
@@ -259,12 +261,10 @@ export default async function handler(req, res) {
         } else if (innerError.message.includes('RESOURCE_EXHAUSTED')) {
             errorMsg = '報告同仁，服務忙碌中，請稍候再試或檢查您的用量配額。';
         } else if (innerError.message.includes('Bad Request') || innerError.message.includes('Failed to parse response')) {
-            // This might catch issues with model response format if it's not proper text
             errorMsg = '報告同仁，模型回應格式異常，請稍後再試。';
         } else if (innerError.message.includes('Rate Limit Exceeded')) {
             errorMsg = '報告同仁，請求頻率過高，請稍候再試。';
         }
-
 
         try {
             await client.replyMessage(event.replyToken, {

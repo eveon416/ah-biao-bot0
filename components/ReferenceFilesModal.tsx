@@ -14,6 +14,12 @@ const ReferenceFilesModal: React.FC<ReferenceFilesModalProps> = ({ isOpen, onClo
       category: "機關專屬規範與系統 (Internal)",
       files: [
         {
+          title: "科務會議輪值表",
+          date: "114年12月8日基準",
+          desc: "行政科共 10 人循環輪值表 (基準週 12/8-12/14 為陳怡妗)。",
+          highlight: true
+        },
+        {
           title: "花蓮縣衛生局所會計室辦理採購付款(會辦)案件審核重點",
           date: "114年12月起適用",
           desc: "包含契約變更、驗收事項、履約期限及保險等審核關鍵項目。",
