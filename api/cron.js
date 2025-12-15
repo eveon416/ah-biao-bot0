@@ -1,6 +1,57 @@
 import { Client } from "@line/bot-sdk";
 
-// 輔助函式：建立輪值 Flex Message
+// === 全域設定：需跳過輪值的週次 (以該週「週一」日期為準) ===
+// 2025-01-27 為 2025 農曆春節
+// 2026-02-16 為 2026 農曆春節 (2/16-2/22)
+const SKIP_WEEKS = ['2025-01-27', '2026-02-16']; 
+
+// 檢查是否為暫停週
+function isSkipWeek(dateObj) {
+    const year = dateObj.getFullYear();
+    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const day = String(dateObj.getDate()).padStart(2, '0');
+    // 這裡簡化比對：若當天所在的週一 matches SKIP_WEEKS
+    // 為求精確，我們計算該日期距離週一的 offset
+    const dayOfWeek = dateObj.getDay(); // 0(Sun) - 6(Sat)
+    const diffToMon = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek;
+    const monday = new Date(dateObj);
+    monday.setDate(dateObj.getDate() + diffToMon);
+    
+    const mYear = monday.getFullYear();
+    const mMonth = String(monday.getMonth() + 1).padStart(2, '0');
+    const mDay = String(monday.getDate()).padStart(2, '0');
+    const mondayStr = `${mYear}-${mMonth}-${mDay}`;
+    
+    return SKIP_WEEKS.includes(mondayStr);
+}
+
+// 計算有效週數差 (扣除暫停週)
+function getEffectiveWeeksDiff(targetDate, anchorDate) {
+    const oneWeekMs = 604800000;
+    const rawDiffTime = targetDate.getTime() - anchorDate.getTime();
+    const rawWeeks = Math.floor(rawDiffTime / oneWeekMs);
+
+    // 計算區間內有多少個 SKIP_WEEKS
+    let skipCount = 0;
+    const start = rawDiffTime > 0 ? anchorDate : targetDate;
+    const end = rawDiffTime > 0 ? targetDate : anchorDate;
+
+    // 簡單迴圈檢查每個 SKIP_WEEK 是否落在區間內
+    SKIP_WEEKS.forEach(skipDateStr => {
+        const skipDate = new Date(skipDateStr + 'T00:00:00+08:00');
+        if (skipDate >= start && skipDate < end) {
+            skipCount++;
+        }
+    });
+
+    if (rawDiffTime > 0) {
+        return rawWeeks - skipCount;
+    } else {
+        return rawWeeks + skipCount;
+    }
+}
+
+// 輔助函式：建立輪值 Flex Message (正常版)
 function createRosterFlex(dutyPerson) {
   return {
     type: 'flex',
@@ -110,74 +161,162 @@ function createRosterFlex(dutyPerson) {
   };
 }
 
+// 輔助函式：建立暫停公告 Flex Message (暫停版)
+function createSuspendFlex(reason = "國定假日或特殊事由") {
+  return {
+    type: 'flex',
+    altText: `⛔ 行政科週知：本週科務會議暫停辦理`,
+    contents: {
+      type: "bubble",
+      size: "giga",
+      header: {
+        type: "box",
+        layout: "vertical",
+        backgroundColor: "#b91c1c", // Red-700
+        paddingAll: "lg",
+        contents: [
+          {
+            type: "text",
+            text: "⛔ 會議暫停公告",
+            color: "#ffffff",
+            weight: "bold",
+            size: "lg"
+          }
+        ]
+      },
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        contents: [
+          {
+            type: "text",
+            text: "報告同仁早安 ☀️",
+            color: "#64748b",
+            size: "sm"
+          },
+          {
+            type: "text",
+            text: `因適逢${reason}`,
+            color: "#334155",
+            size: "md",
+            weight: "bold",
+            align: "center",
+            margin: "lg"
+          },
+          {
+            type: "text",
+            text: "本週科務會議",
+            size: "xl", 
+            weight: "bold",
+            color: "#1e293b",
+            align: "center"
+          },
+          {
+            type: "text",
+            text: "【暫停辦理乙次】",
+            size: "xxl", 
+            weight: "bold",
+            color: "#ef4444", // Red-500
+            align: "center",
+            margin: "sm"
+          },
+           {
+            type: "text",
+            text: "( 本週暫停輪值，順序遞延 )",
+            size: "sm", 
+            color: "#94a3b8",
+            align: "center",
+            margin: "md"
+          },
+          {
+            type: "separator",
+            color: "#cbd5e1",
+            margin: "xl"
+          },
+          {
+            type: "text",
+            text: "祝各位假期愉快，平安順心！✨",
+            margin: "xl",
+            size: "xs",
+            color: "#94a3b8",
+            align: "center"
+          }
+        ]
+      }
+    }
+  };
+}
+
 // Vercel Cron Job Handler
 export default async function handler(req, res) {
-  // 1. 安全驗證
-  // 如果是 Cron 自動執行，需檢查 Authorization Header
-  // 如果是手動觸發 (query 帶有 manual=true)，則允許通過 (方便前端測試)
   const isManualRun = req.query.manual === 'true';
+  const actionType = req.query.type || 'weekly'; 
+
   const authHeader = req.headers['authorization'];
   
   if (!isManualRun && process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(401).json({ success: false, message: 'Unauthorized' });
   }
 
-  // 2. 檢查必要設定
   const channelAccessToken = process.env.CHANNEL_ACCESS_TOKEN;
   const channelSecret = process.env.CHANNEL_SECRET;
   const targetGroupId = process.env.LINE_GROUP_ID;
 
   if (!channelAccessToken || !channelSecret) {
-    console.error('Missing LINE Config');
-    return res.status(500).json({ success: false, message: 'Server Config Error: Missing Channel Token/Secret' });
+    return res.status(500).json({ success: false, message: 'Missing Channel Token/Secret' });
   }
 
   if (!targetGroupId) {
-    console.error('Missing LINE_GROUP_ID');
-    return res.status(500).json({ success: false, message: 'Server Config Error: Missing LINE_GROUP_ID' });
+    return res.status(500).json({ success: false, message: 'Missing LINE_GROUP_ID' });
   }
 
   try {
-    const client = new Client({
-      channelAccessToken,
-      channelSecret,
-    });
-
-    // 3. 執行每週科務會議輪值推播
-    console.log('Running Weekly Roster Announcement...');
+    const client = new Client({ channelAccessToken, channelSecret });
+    let flexMsg;
+    let logMessage = "";
     
-    const staffList = [
-      '林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰',
-      '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'
-    ];
-
-    // 設定錨點日期：114年12月8日 (2025-12-08) -> 當週輪值為：陳怡妗 (Index 6)
-    const anchorDate = new Date('2025-12-08T00:00:00+08:00'); 
-    const anchorIndex = 6;
-
-    // 取得當前時間 (調整為台灣時間)
+    // 取得當前台灣時間
     const now = new Date();
     const taiwanNow = new Date(now.getTime() + (8 * 60 * 60 * 1000));
-    
-    // 計算與錨點日期的時間差
-    const oneWeekMs = 604800000;
-    const diffTime = taiwanNow.getTime() - anchorDate.getTime();
-    const diffWeeks = Math.floor(diffTime / oneWeekMs);
 
-    // 計算當週索引
-    let targetIndex = (anchorIndex + diffWeeks) % staffList.length;
-    if (targetIndex < 0) targetIndex = targetIndex + staffList.length;
+    let effectiveType = actionType;
+    if (!isManualRun && isSkipWeek(taiwanNow)) {
+        console.log(`Today ${taiwanNow.toISOString()} is a SKIP WEEK. Switching to suspend notice.`);
+        effectiveType = 'suspend';
+    }
 
-    const dutyPerson = staffList[targetIndex];
-    const flexMsg = createRosterFlex(dutyPerson);
+    if (effectiveType === 'suspend') {
+        console.log('Running Suspension Announcement...');
+        flexMsg = createSuspendFlex(isSkipWeek(taiwanNow) ? "春節連假或排定休假" : "特殊事由");
+        logMessage = "Suspension Notice Sent";
+    } else {
+        console.log('Running Weekly Roster Announcement...');
+        
+        const staffList = [
+          '林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰',
+          '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'
+        ];
+        const anchorDate = new Date('2025-12-08T00:00:00+08:00'); 
+        const anchorIndex = 6;
+
+        // 使用「扣除暫停週」的邏輯計算
+        const diffWeeks = getEffectiveWeeksDiff(taiwanNow, anchorDate);
+
+        let targetIndex = (anchorIndex + diffWeeks) % staffList.length;
+        if (targetIndex < 0) targetIndex = targetIndex + staffList.length;
+
+        const dutyPerson = staffList[targetIndex];
+        flexMsg = createRosterFlex(dutyPerson);
+        logMessage = `Weekly Roster Sent. Duty: ${dutyPerson} (Effective Weeks from anchor: ${diffWeeks})`;
+    }
 
     await client.pushMessage(targetGroupId, flexMsg);
     
-    console.log(`Weekly Flex Message sent to ${targetGroupId}. Duty: ${dutyPerson}`);
     return res.status(200).json({ 
         success: true, 
-        message: 'Weekly Roster Sent Successfully', 
-        duty: dutyPerson,
+        message: logMessage, 
+        type: effectiveType,
         timestamp: taiwanNow.toISOString()
     });
 

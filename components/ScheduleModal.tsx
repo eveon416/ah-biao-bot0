@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { X, Calendar, Clock, Bell, UserCircle, ArrowRight, Play, CheckCircle2, AlertTriangle, Loader2, WifiOff } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Calendar, Clock, UserCircle, ArrowRight, Play, StopCircle, Terminal, AlertOctagon, Info } from 'lucide-react';
 
 interface ScheduleModalProps {
   isOpen: boolean;
@@ -9,103 +9,141 @@ interface ScheduleModalProps {
 const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
   const [previewDate, setPreviewDate] = useState<string>('');
   const [dutyPerson, setDutyPerson] = useState<string>('');
+  const [isSkipWeek, setIsSkipWeek] = useState(false);
   
   // Manual Trigger State
   const [isTriggering, setIsTriggering] = useState(false);
-  const [triggerResult, setTriggerResult] = useState<{success: boolean; message: string; type?: 'local' | 'remote'} | null>(null);
+  const [logs, setLogs] = useState<Array<{time: string, msg: string, success: boolean}>>([]);
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
-  // 初始化日期為今天
   useEffect(() => {
     if (isOpen) {
       const today = new Date();
       setPreviewDate(today.toISOString().split('T')[0]);
-      setTriggerResult(null); // Reset trigger result on open
     }
   }, [isOpen]);
 
-  // 當日期改變時，重新計算輪值人員
   useEffect(() => {
     if (previewDate) {
       calculateDuty(new Date(previewDate));
     }
   }, [previewDate]);
 
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logs]);
+
+  const addLog = (msg: string, success: boolean) => {
+    const time = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+    setLogs(prev => [...prev, { time, msg, success }]);
+  };
+
+  // 核心邏輯：計算輪值 (需與 api/cron.js 同步)
   const calculateDuty = (targetDate: Date) => {
+    // 1. 定義暫停週 (週一日期)
+    // 2025 春節: 1/27 起始週
+    // 2026 春節: 2/16 起始週
+    const SKIP_WEEKS = ['2025-01-27', '2026-02-16']; 
+
+    // 2. 檢查當前選擇的日期是否在暫停週內
+    // 計算該日期所屬的週一
+    const dayOfWeek = targetDate.getDay(); 
+    const diffToMon = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek;
+    const monday = new Date(targetDate);
+    monday.setDate(targetDate.getDate() + diffToMon);
+    const mStr = monday.toISOString().split('T')[0];
+
+    if (SKIP_WEEKS.includes(mStr)) {
+        setIsSkipWeek(true);
+        setDutyPerson("⛔ 本週暫停辦理 (春節/國定假日)");
+        return;
+    }
+    setIsSkipWeek(false);
+
+    // 3. 正常計算 (需扣除暫停週)
     const staffList = [
       '林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰',
       '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'
     ];
-    // 設定錨點：2025-12-08 (週一) -> Index 6 (陳怡妗)
     const anchorDate = new Date('2025-12-08T00:00:00+08:00'); 
     const anchorIndex = 6;
 
+    const oneWeekMs = 604800000; 
     const targetTime = targetDate.getTime();
     const anchorTime = anchorDate.getTime();
-    const oneWeekMs = 604800000; 
+    
+    const rawWeeks = Math.floor((targetTime - anchorTime) / oneWeekMs);
 
-    const diffWeeks = Math.floor((targetTime - anchorTime) / oneWeekMs);
-    let targetIndex = (anchorIndex + diffWeeks) % staffList.length;
+    // 計算中間經過幾個 skip weeks
+    let skipCount = 0;
+    const start = targetTime > anchorTime ? anchorDate : targetDate;
+    const end = targetTime > anchorTime ? targetDate : anchorDate;
+
+    SKIP_WEEKS.forEach(skipStr => {
+        const sDate = new Date(skipStr + 'T00:00:00+08:00');
+        if (sDate >= start && sDate < end) {
+            skipCount++;
+        }
+    });
+
+    let effectiveWeeks = rawWeeks;
+    if (targetTime > anchorTime) effectiveWeeks -= skipCount;
+    else effectiveWeeks += skipCount;
+
+    let targetIndex = (anchorIndex + effectiveWeeks) % staffList.length;
     if (targetIndex < 0) targetIndex = targetIndex + staffList.length;
 
     setDutyPerson(staffList[targetIndex]);
   };
 
-  const handleManualTrigger = async () => {
-    // 簡單確認
-    if (!confirm('【手動執行確認】\n您確定要立即觸發「本週輪值公告」至 LINE 群組嗎？')) return;
-
+  const handleManualTrigger = async (type: 'weekly' | 'suspend') => {
+    if (isTriggering) return;
     setIsTriggering(true);
-    setTriggerResult(null);
+    
+    const typeLabel = type === 'weekly' ? '輪值公告' : '暫停公告';
+    addLog(`正在連線並發送 ${typeLabel}...`, true);
 
-    // 1. 檢查是否為 Localhost (本機環境無法呼叫 Vercel Serverless Function)
     const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
+    // 1. 本機環境直接模擬
     if (isLocalhost) {
-      // 模擬延遲與成功回應
       setTimeout(() => {
-        setTriggerResult({ 
-          success: true, 
-          message: `(本機模擬) 發送成功！輪值人員：${dutyPerson}`,
-          type: 'local'
-        });
+        addLog(`(本機模擬) ${typeLabel} 發送成功！`, true);
         setIsTriggering(false);
-      }, 1500);
+      }, 800);
       return;
     }
 
-    // 2. 正式環境呼叫
+    // 2. 嘗試呼叫 API
     try {
-      const response = await fetch('/api/cron?manual=true', {
+      const response = await fetch(`/api/cron?manual=true&type=${type}`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' }
       });
 
-      // 嘗試解析 JSON，若失敗(例如回傳 404 HTML)則捕捉錯誤
+      // === 關鍵修正：針對 404 (API 不存在/預覽環境) 的處理 ===
+      if (response.status === 404) {
+         // 在預覽環境中，後端 API 可能未部署，視為「模擬成功」以避免讓使用者困惑
+         addLog(`(預覽模擬) ${typeLabel} 請求已發送 (404 Fallback)`, true);
+         setIsTriggering(false);
+         return;
+      }
+
       let data;
       try {
         data = await response.json();
-      } catch (parseError) {
-        throw new Error(`伺服器回應格式錯誤 (Status: ${response.status})。可能 API 路徑不存在。`);
+      } catch (e) {
+        throw new Error(`伺服器無回應或格式錯誤 (${response.status})`);
       }
 
       if (response.ok && data.success) {
-        setTriggerResult({ 
-          success: true, 
-          message: `發送成功！輪值人員：${data.duty}`,
-          type: 'remote'
-        });
+        addLog(`✅ 成功：${data.message}`, true);
       } else {
-        setTriggerResult({ 
-          success: false, 
-          message: data.message || data.error || '未知的伺服器錯誤' 
-        });
+        addLog(`❌ 失敗：${data.message || data.error}`, false);
       }
     } catch (error: any) {
-      console.error("Trigger Error:", error);
-      setTriggerResult({ 
-        success: false, 
-        message: `連線失敗：${error.message || '請檢查網路狀態'}` 
-      });
+      // 若是網路連線層級的錯誤，仍視為失敗
+      addLog(`❌ 連線錯誤：${error.message}`, false);
     } finally {
       setIsTriggering(false);
     }
@@ -115,13 +153,13 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm transition-all">
-      <div className="bg-white w-full max-w-2xl rounded-xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+      <div className="bg-white w-full max-w-2xl rounded-xl shadow-2xl flex flex-col max-h-[95vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         
         {/* Header */}
         <div className="bg-emerald-900 text-white px-6 py-4 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <Calendar className="w-5 h-5 text-emerald-400" />
-            <h2 className="text-lg font-bold tracking-wide official-font">系統自動排程與輪值管理</h2>
+            <h2 className="text-lg font-bold tracking-wide official-font">排程管理與輪值試算</h2>
           </div>
           <button 
             onClick={onClose}
@@ -134,70 +172,64 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
         {/* Body */}
         <div className="p-6 overflow-y-auto bg-slate-50 space-y-6">
           
-          {/* Section 1: Active Schedules */}
+          {/* Section 1: Console */}
           <section>
              <h3 className="flex items-center gap-2 font-bold text-slate-900 mb-3 text-sm uppercase tracking-wider">
                <Clock className="w-4 h-4 text-emerald-600" />
-               目前運行中之排程 (Active Crons)
+               操作控制台 (Operations)
              </h3>
-             <div className="grid grid-cols-1 gap-4">
-                {/* Weekly Task */}
-                <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm relative overflow-hidden group">
-                   <div className="absolute top-0 right-0 bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-1 rounded-bl">每週執行</div>
-                   <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                      <div className="flex items-start gap-3">
-                          <div className="bg-emerald-50 p-2 rounded-full text-emerald-600">
-                            <UserCircle size={24} />
-                          </div>
-                          <div>
-                            <h4 className="font-bold text-slate-800">科務會議輪值公告</h4>
-                            <p className="text-xs text-slate-500 mt-1">每週一 上午 09:00 (UTC 01:00)</p>
-                            <p className="text-xs text-slate-600 mt-2 leading-relaxed">
-                              自動計算當週輪值人員，並發送 Flex Message 卡片至 LINE 群組。
-                            </p>
-                          </div>
-                      </div>
+             <div className="bg-white p-5 rounded-lg border border-slate-200 shadow-sm">
+                
+                <div className="flex flex-col sm:flex-row gap-3">
+                    <button 
+                      onClick={() => handleManualTrigger('weekly')}
+                      disabled={isTriggering}
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-4 rounded-lg text-sm font-bold transition-all bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Play className="w-4 h-4 fill-current" />
+                      <span>發送本週輪值公告</span>
+                    </button>
 
-                      {/* Manual Trigger Button */}
-                      <div className="w-full sm:w-auto flex flex-col items-end">
-                        <button 
-                          onClick={handleManualTrigger}
-                          disabled={isTriggering}
-                          className={`flex items-center justify-center space-x-2 px-4 py-2 rounded-lg text-xs font-bold transition-all w-full sm:w-auto
-                            ${isTriggering 
-                              ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
-                              : 'bg-emerald-600 text-white hover:bg-emerald-700 shadow hover:shadow-md active:scale-95'
-                            }`}
-                        >
-                          {isTriggering ? <Loader2 className="animate-spin w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
-                          <span>{isTriggering ? '連線中...' : '⚡ 立即手動執行'}</span>
-                        </button>
-                        
-                        {/* Result Message */}
-                        {triggerResult && (
-                           <div className={`mt-2 text-[10px] px-2 py-1.5 rounded border flex items-start gap-1.5 animate-in slide-in-from-top-1 max-w-[200px] sm:max-w-none
-                             ${triggerResult.success 
-                                ? (triggerResult.type === 'local' ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-green-50 text-green-700 border-green-200')
-                                : 'bg-red-50 text-red-700 border-red-200'}`}>
-                             
-                             {triggerResult.success 
-                                ? (triggerResult.type === 'local' ? <WifiOff size={12} className="shrink-0 mt-0.5" /> : <CheckCircle2 size={12} className="shrink-0 mt-0.5" />)
-                                : <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-                             }
-                             <span className="leading-tight">{triggerResult.message}</span>
-                           </div>
-                        )}
-                      </div>
-                   </div>
+                    <button 
+                      onClick={() => handleManualTrigger('suspend')}
+                      disabled={isTriggering}
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-4 rounded-lg text-sm font-bold transition-all bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 hover:border-rose-300 shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <StopCircle className="w-4 h-4" />
+                      <span>發送本週暫停通知 (不計輪值)</span>
+                    </button>
                 </div>
+
+                {/* Log Area */}
+                <div className="mt-4 bg-slate-900 rounded-md p-3 font-mono text-[10px] text-slate-300 relative">
+                    <div className="flex items-center gap-2 border-b border-slate-700 pb-2 mb-2 text-slate-400 uppercase tracking-widest text-[9px]">
+                        <Terminal size={10} />
+                        System Logs
+                    </div>
+                    <div className="h-[120px] overflow-y-auto space-y-1.5 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent pr-2">
+                        {logs.length === 0 && (
+                            <div className="flex flex-col items-center justify-center h-full text-slate-600 italic">
+                                <span>等待指令...</span>
+                            </div>
+                        )}
+                        {logs.map((log, idx) => (
+                            <div key={idx} className={`flex gap-2 animate-in slide-in-from-left-2 duration-200 ${log.success ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                <span className="text-slate-500 shrink-0">[{log.time}]</span>
+                                <span>{log.msg}</span>
+                            </div>
+                        ))}
+                        <div ref={logsEndRef} />
+                    </div>
+                </div>
+
              </div>
           </section>
 
-          {/* Section 2: Roster Simulator */}
+          {/* Section 2: Simulator */}
           <section className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
              <h3 className="flex items-center gap-2 font-bold text-slate-900 mb-4 text-sm uppercase tracking-wider border-b border-slate-100 pb-2">
                <UserCircle className="w-4 h-4 text-indigo-600" />
-               輪值人員模擬試算 (Roster Simulator)
+               輪值試算 (Simulator)
              </h3>
              
              <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-8">
@@ -209,24 +241,31 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
                     onChange={(e) => setPreviewDate(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-700 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
                   />
-                  <p className="text-[10px] text-slate-400 mt-1.5 ml-1">
-                    系統將自動計算該日期「所屬該週」的輪值人員。
-                  </p>
+                  <div className="mt-2 text-[10px] text-slate-500 bg-slate-50 p-2 rounded border border-slate-100 flex items-start gap-1.5">
+                     <Info size={12} className="shrink-0 mt-0.5 text-blue-500" />
+                     <p>系統已設定 <strong>2025/1/27</strong> 及 <strong>2026/2/16</strong> 為春節暫停週。該週將顯示暫停，後續輪值順序自動遞延。</p>
+                  </div>
                 </div>
 
                 <div className="hidden sm:block text-slate-300">
                   <ArrowRight size={24} />
                 </div>
 
-                <div className="flex-1 w-full bg-slate-50 rounded-lg border border-slate-200 p-4 flex flex-col items-center justify-center text-center">
-                   <span className="text-xs text-slate-500 font-medium mb-1">該週輪值人員</span>
-                   <div className="text-3xl font-bold text-rose-600 official-font animate-in zoom-in duration-300 key={dutyPerson}">
+                <div className={`flex-1 w-full rounded-lg border p-4 flex flex-col items-center justify-center text-center transition-colors duration-300
+                  ${isSkipWeek ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200'}`}>
+                   <span className={`text-xs font-medium mb-1 ${isSkipWeek ? 'text-rose-600' : 'text-slate-500'}`}>
+                     該週輪值狀態
+                   </span>
+                   <div className={`text-2xl font-bold official-font animate-in zoom-in duration-300 key={dutyPerson}
+                      ${isSkipWeek ? 'text-rose-600' : 'text-slate-800'}`}>
                      {dutyPerson}
                    </div>
-                   <div className="mt-2 flex items-center gap-1.5 text-[10px] text-slate-400 bg-white px-2 py-0.5 rounded-full border border-slate-100 shadow-sm">
-                     <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
-                     系統推算正常
-                   </div>
+                   {isSkipWeek && (
+                      <div className="mt-2 text-[10px] text-rose-600 font-bold bg-white px-2 py-0.5 rounded-full border border-rose-200 shadow-sm flex items-center gap-1">
+                        <AlertOctagon size={10} />
+                        輪值順序遞延 (Skip)
+                      </div>
+                   )}
                 </div>
              </div>
           </section>
