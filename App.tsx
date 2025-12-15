@@ -89,7 +89,7 @@ const App: React.FC = () => {
   }, [messages, isLoading]);
 
   // 接收來自 ScheduleModal 的指令，直接在對話視窗生成公告 (美化版)
-  const handleGenerateAnnouncement = (type: 'weekly' | 'suspend', info: string) => {
+  const handleGenerateAnnouncement = (type: 'weekly' | 'suspend' | 'general', info: string) => {
     const timestamp = new Date();
     let content = "";
     
@@ -104,8 +104,8 @@ const App: React.FC = () => {
 1. 煩請於 **週二下班前** 完成工作日誌 📝
 2. 輪值同仁於 **週三** 彙整陳核用印 🈳
 
-*(系統備註：本公告已發送至 LINE 排程佇列)*`;
-    } else {
+*(系統備註：本公告已發送至 LINE 排程佇列，格式為 Card)*`;
+    } else if (type === 'suspend') {
          content = `### ⛔ 會議暫停公告 (系統擬稿預覽)
 
 **【暫停事由】**
@@ -116,7 +116,15 @@ const App: React.FC = () => {
 1. 本週科務會議 **【暫停辦理乙次】**
 2. 輪值順序遞延，本週免計。
 
-*(系統備註：祝各位假期愉快，平安順心)*`;
+*(系統備註：本公告已發送至 LINE 排程佇列，格式為 Text)*`;
+    } else {
+        // type === 'general'
+        content = `### 📝 一般公告 (系統擬稿預覽)
+
+${info}
+
+---
+*(系統備註：本公告已發送至 LINE 排程佇列，格式為 Text)*`;
     }
 
     const botMsg: Message = {
@@ -130,6 +138,12 @@ const App: React.FC = () => {
     setTimeout(() => {
         setMessages(prev => [...prev, botMsg]);
     }, 600);
+  };
+
+  // 處理來自 Modal 的潤飾請求
+  const handleRequestRefine = (text: string) => {
+      const prompt = `阿標，請幫我潤飾以下公告內容，使其語氣委婉但堅定，並符合公務用語，適當加入表情符號：\n\n${text}`;
+      handleSendMessage(prompt);
   };
 
   const handleClearChat = () => {
@@ -166,6 +180,7 @@ const App: React.FC = () => {
         isOpen={isScheduleOpen} 
         onClose={() => setIsScheduleOpen(false)} 
         onGenerate={handleGenerateAnnouncement}
+        onRequestRefine={handleRequestRefine}
       />
 
       <main className="flex-1 overflow-hidden flex flex-col relative max-w-5xl w-full mx-auto bg-white shadow-2xl md:my-4 md:rounded-xl md:border border-slate-200">
