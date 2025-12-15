@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Calendar, Clock, UserCircle, ArrowRight, Play, StopCircle, Terminal, AlertOctagon, Info } from 'lucide-react';
+import { X, Calendar, Clock, UserCircle, ArrowRight, Play, StopCircle, Terminal, AlertOctagon, Info, MessageSquare } from 'lucide-react';
 
 interface ScheduleModalProps {
   isOpen: boolean;
   onClose: () => void;
+  // 新增 Prop：通知父層生成公告
+  onGenerate: (type: 'weekly' | 'suspend', info: string) => void;
 }
 
-const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
+const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenerate }) => {
   const [previewDate, setPreviewDate] = useState<string>('');
   const [dutyPerson, setDutyPerson] = useState<string>('');
   const [isSkipWeek, setIsSkipWeek] = useState(false);
@@ -19,7 +21,11 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
   useEffect(() => {
     if (isOpen) {
       const today = new Date();
-      setPreviewDate(today.toISOString().split('T')[0]);
+      // 預設日期：處理時區問題，確保是當地日期
+      const yyyy = today.getFullYear();
+      const mm = String(today.getMonth() + 1).padStart(2, '0');
+      const dd = String(today.getDate()).padStart(2, '0');
+      setPreviewDate(`${yyyy}-${mm}-${dd}`);
     }
   }, [isOpen]);
 
@@ -101,51 +107,32 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
     setIsTriggering(true);
     
     const typeLabel = type === 'weekly' ? '輪值公告' : '暫停公告';
-    addLog(`正在連線並發送 ${typeLabel}...`, true);
+    addLog(`正在擬定 ${typeLabel}...`, true);
 
-    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-
-    // 1. 本機環境直接模擬
-    if (isLocalhost) {
-      setTimeout(() => {
-        addLog(`(本機模擬) ${typeLabel} 發送成功！`, true);
-        setIsTriggering(false);
-      }, 800);
-      return;
-    }
-
-    // 2. 嘗試呼叫 API
+    // 1. 直接觸發主視窗生成 (指揮中心模式)
     try {
-      const response = await fetch(`/api/cron?manual=true&type=${type}`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' }
-      });
+        if (type === 'weekly') {
+            if (isSkipWeek) {
+                // 若使用者在暫停週堅持發輪值公告，系統自動轉為發送暫停公告
+                addLog(`⚠️ 偵測到本週為暫停週，自動轉為暫停公告`, false);
+                onGenerate('suspend', '春節/國定假日');
+            } else {
+                onGenerate('weekly', dutyPerson);
+            }
+        } else {
+            // 強制發送暫停
+             onGenerate('suspend', isSkipWeek ? '春節/國定假日' : '特殊事由');
+        }
+        
+        // 模擬一點處理時間
+        setTimeout(() => {
+             addLog(`✅ 擬稿完成！請查看主視窗`, true);
+             setIsTriggering(false);
+        }, 800);
 
-      // === 關鍵修正：針對 404 (API 不存在/預覽環境) 的處理 ===
-      if (response.status === 404) {
-         // 在預覽環境中，後端 API 可能未部署，視為「模擬成功」以避免讓使用者困惑
-         addLog(`(預覽模擬) ${typeLabel} 請求已發送 (404 Fallback)`, true);
-         setIsTriggering(false);
-         return;
-      }
-
-      let data;
-      try {
-        data = await response.json();
-      } catch (e) {
-        throw new Error(`伺服器無回應或格式錯誤 (${response.status})`);
-      }
-
-      if (response.ok && data.success) {
-        addLog(`✅ 成功：${data.message}`, true);
-      } else {
-        addLog(`❌ 失敗：${data.message || data.error}`, false);
-      }
-    } catch (error: any) {
-      // 若是網路連線層級的錯誤，仍視為失敗
-      addLog(`❌ 連線錯誤：${error.message}`, false);
-    } finally {
-      setIsTriggering(false);
+    } catch (e) {
+        addLog(`❌ 擬稿失敗`, false);
+        setIsTriggering(false);
     }
   };
 
@@ -159,7 +146,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
         <div className="bg-emerald-900 text-white px-6 py-4 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <Calendar className="w-5 h-5 text-emerald-400" />
-            <h2 className="text-lg font-bold tracking-wide official-font">排程管理與輪值試算</h2>
+            <h2 className="text-lg font-bold tracking-wide official-font">排程指揮中心</h2>
           </div>
           <button 
             onClick={onClose}
@@ -176,7 +163,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
           <section>
              <h3 className="flex items-center gap-2 font-bold text-slate-900 mb-3 text-sm uppercase tracking-wider">
                <Clock className="w-4 h-4 text-emerald-600" />
-               操作控制台 (Operations)
+               操作控制台 (Command Console)
              </h3>
              <div className="bg-white p-5 rounded-lg border border-slate-200 shadow-sm">
                 
@@ -184,19 +171,19 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
                     <button 
                       onClick={() => handleManualTrigger('weekly')}
                       disabled={isTriggering}
-                      className="flex-1 flex items-center justify-center gap-2 px-4 py-4 rounded-lg text-sm font-bold transition-all bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-4 rounded-lg text-sm font-bold transition-all bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed group"
                     >
-                      <Play className="w-4 h-4 fill-current" />
-                      <span>發送本週輪值公告</span>
+                      <MessageSquare className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                      <span>生成本週輪值公告</span>
                     </button>
 
                     <button 
                       onClick={() => handleManualTrigger('suspend')}
                       disabled={isTriggering}
-                      className="flex-1 flex items-center justify-center gap-2 px-4 py-4 rounded-lg text-sm font-bold transition-all bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 hover:border-rose-300 shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-4 rounded-lg text-sm font-bold transition-all bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 hover:border-rose-300 shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed group"
                     >
-                      <StopCircle className="w-4 h-4" />
-                      <span>發送本週暫停通知 (不計輪值)</span>
+                      <StopCircle className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                      <span>生成暫停辦理公告</span>
                     </button>
                 </div>
 
@@ -229,12 +216,12 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
           <section className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
              <h3 className="flex items-center gap-2 font-bold text-slate-900 mb-4 text-sm uppercase tracking-wider border-b border-slate-100 pb-2">
                <UserCircle className="w-4 h-4 text-indigo-600" />
-               輪值試算 (Simulator)
+               輪值狀態預覽 (Preview)
              </h3>
              
              <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-8">
                 <div className="flex-1 w-full">
-                  <label className="block text-xs font-bold text-slate-500 mb-1.5 ml-1">選擇預覽日期</label>
+                  <label className="block text-xs font-bold text-slate-500 mb-1.5 ml-1">選擇擬稿日期</label>
                   <input 
                     type="date" 
                     value={previewDate}
@@ -243,7 +230,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
                   />
                   <div className="mt-2 text-[10px] text-slate-500 bg-slate-50 p-2 rounded border border-slate-100 flex items-start gap-1.5">
                      <Info size={12} className="shrink-0 mt-0.5 text-blue-500" />
-                     <p>系統已設定 <strong>2025/1/27</strong> 及 <strong>2026/2/16</strong> 為春節暫停週。該週將顯示暫停，後續輪值順序自動遞延。</p>
+                     <p>系統已設定 <strong>2025/1/27</strong> 及 <strong>2026/2/16</strong> 為春節暫停週。選定日期後，上方按鈕將依此日期生成對應內容。</p>
                   </div>
                 </div>
 
@@ -254,7 +241,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
                 <div className={`flex-1 w-full rounded-lg border p-4 flex flex-col items-center justify-center text-center transition-colors duration-300
                   ${isSkipWeek ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200'}`}>
                    <span className={`text-xs font-medium mb-1 ${isSkipWeek ? 'text-rose-600' : 'text-slate-500'}`}>
-                     該週輪值狀態
+                     該週輪值人員
                    </span>
                    <div className={`text-2xl font-bold official-font animate-in zoom-in duration-300 key={dutyPerson}
                       ${isSkipWeek ? 'text-rose-600' : 'text-slate-800'}`}>

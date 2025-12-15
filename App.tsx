@@ -65,7 +65,6 @@ const App: React.FC = () => {
     setMessages((prev) => [...prev, botMsg]);
 
     try {
-      // The context includes all messages except the one we just added (empty bot msg)
       const conversationHistory = [...messages, userMsg];
       
       await streamResponse(conversationHistory, userMsg.content, (chunkText) => {
@@ -85,10 +84,36 @@ const App: React.FC = () => {
       );
     } finally {
       setIsLoading(false);
-      // Wait a tick for render then focus back
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [messages, isLoading]);
+
+  // 接收來自 ScheduleModal 的指令，直接在對話視窗生成公告
+  const handleGenerateAnnouncement = (type: 'weekly' | 'suspend', info: string) => {
+    const timestamp = new Date();
+    let content = "";
+    
+    if (type === 'weekly') {
+        content = `📢 **【行政科週知】**\n\n報告同仁早安 ☀️\n本週科務會議輪值紀錄為：**${info}**\n\n煩請各位於 **週二下班前** 完成工作日誌 📝\n俾利輪值同仁於 **週三** 彙整陳核用印 🈳\n\n辛苦了，祝本週工作順心！💪✨`;
+    } else {
+         content = `⛔ **【會議暫停公告】**\n\n報告同仁早安 ☀️\n因適逢 **${info}**\n本週科務會議 **【暫停辦理乙次】**\n( 本週免計輪值人員 )\n\n祝各位假期愉快，平安順心！✨`;
+    }
+
+    const botMsg: Message = {
+        id: Date.now().toString(),
+        role: 'model',
+        content: content,
+        timestamp: timestamp,
+    };
+    
+    // 稍微延遲一點，讓使用者感覺系統在處理
+    setTimeout(() => {
+        setMessages(prev => [...prev, botMsg]);
+    }, 600);
+    
+    // 不關閉 Modal，讓使用者可以繼續操作，但會看到背景有新訊息
+    // setIsScheduleOpen(false); 
+  };
 
   const handleClearChat = () => {
     if (window.confirm('確定要清除所有對話紀錄嗎？')) {
@@ -120,7 +145,11 @@ const App: React.FC = () => {
       
       <SystemRulesModal isOpen={isRulesOpen} onClose={() => setIsRulesOpen(false)} />
       <ReferenceFilesModal isOpen={isFilesOpen} onClose={() => setIsFilesOpen(false)} />
-      <ScheduleModal isOpen={isScheduleOpen} onClose={() => setIsScheduleOpen(false)} />
+      <ScheduleModal 
+        isOpen={isScheduleOpen} 
+        onClose={() => setIsScheduleOpen(false)} 
+        onGenerate={handleGenerateAnnouncement}
+      />
 
       <main className="flex-1 overflow-hidden flex flex-col relative max-w-5xl w-full mx-auto bg-white shadow-2xl md:my-4 md:rounded-xl md:border border-slate-200">
         
@@ -145,7 +174,6 @@ const App: React.FC = () => {
         {/* Input Area */}
         <div className="bg-slate-50 border-t border-slate-200 p-4">
           
-          {/* Quick Suggestions (Only show if chat is short) */}
           {messages.length < 3 && (
             <div className="mb-4">
               <p className="text-xs font-bold text-slate-400 mb-2 uppercase tracking-wider ml-1">常用諮詢事項</p>
