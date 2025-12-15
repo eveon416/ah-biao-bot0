@@ -138,6 +138,15 @@ function createSuspendFlex(reason) {
 
 // Vercel Cron Job Handler
 export default async function handler(req, res) {
+  // CORS Headers (允許跨域呼叫)
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   // 1. 基本安全檢查
   const isManualRun = req.query.manual === 'true';
   const authHeader = req.headers['authorization'];

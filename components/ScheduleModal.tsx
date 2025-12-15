@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Calendar, Clock, UserCircle, Play, StopCircle, Terminal, AlertOctagon, Info, MessageSquare, Edit3, CheckCircle2, ArrowRight, Server, Users, Plus, Trash2, Save, AlertTriangle, HelpCircle } from 'lucide-react';
+import { X, Calendar, Clock, UserCircle, Play, StopCircle, Terminal, AlertOctagon, Info, MessageSquare, Edit3, CheckCircle2, ArrowRight, Server, Users, Plus, Trash2, Save, AlertTriangle, HelpCircle, Laptop2, Rocket, Globe, Settings } from 'lucide-react';
 
 interface ScheduleModalProps {
   isOpen: boolean;
@@ -28,6 +28,11 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
   const [isAddingGroup, setIsAddingGroup] = useState(false);
   const [idError, setIdError] = useState('');
 
+  // Environment State
+  const [isLocalhost, setIsLocalhost] = useState(false);
+  const [remoteUrl, setRemoteUrl] = useState('');
+  const [showConfig, setShowConfig] = useState(false); // 手動控制設定面板
+
   // Manual Trigger State
   const [isTriggering, setIsTriggering] = useState(false);
   // success 狀態: true=綠, false=紅, null=黃(警告/模擬)
@@ -44,12 +49,31 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       setPreviewDate(`${yyyy}-${mm}-${dd}`);
       setCustomReason(''); 
       
+      // Detect Environment (寬鬆判定)
+      const hostname = window.location.hostname;
+      const isLocal = hostname === 'localhost' || 
+                      hostname === '127.0.0.1' || 
+                      hostname.startsWith('192.168.') ||
+                      hostname === '0.0.0.0';
+      setIsLocalhost(isLocal);
+      
       // Load saved groups from localStorage
       const saved = localStorage.getItem('line_groups_v1');
       if (saved) {
         try {
             setSavedGroups(JSON.parse(saved));
         } catch (e) { console.error('Failed to parse groups', e); }
+      }
+      
+      // Load saved remote URL
+      const savedUrl = localStorage.getItem('line_remote_url');
+      if (savedUrl) {
+          setRemoteUrl(savedUrl);
+      }
+      
+      // 如果是本機或已有設定 URL，預設展開設定面板
+      if (isLocal || savedUrl) {
+          setShowConfig(true);
       }
     }
   }, [isOpen]);
@@ -63,6 +87,13 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
+
+  // Save URL when changed
+  const handleRemoteUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const url = e.target.value;
+      setRemoteUrl(url);
+      localStorage.setItem('line_remote_url', url);
+  };
 
   // ID Validation Logic
   useEffect(() => {
@@ -186,10 +217,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
         ? '預設主群組' 
         : (savedGroups.find(g => g.groupId === selectedGroupId)?.name || '指定群組');
 
-    addLog(`正在連線至 [${targetName}] 並廣播 ${typeLabel}...`, true);
-
-    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-
     // 1. 本機 UI 擬稿
     try {
         if (type === 'weekly') {
@@ -204,12 +231,29 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
         }
     } catch(e) { console.error(e); }
 
-    // 2. 呼叫後端 API
+    // === Localhost 模擬 vs 真實發送判斷 ===
+    const effectiveRemoteUrl = remoteUrl.trim().replace(/\/$/, ''); // Remove trailing slash
+    
+    if (isLocalhost && !effectiveRemoteUrl) {
+        addLog(`🔧 [模擬模式] 準備發送至 ${targetName}...`, null);
+        setTimeout(() => {
+            addLog(`✅ 模擬發送成功 (未消耗 API)`, true);
+            addLog(`ℹ️ 若要真實發送，請上方輸入正式站台網址。`, null);
+        }, 800);
+        setIsTriggering(false);
+        return;
+    }
+
+    // === 正式環境發送 (Local + RemoteURL 或 Production) ===
+    addLog(`正在連線至 ${effectiveRemoteUrl ? `[遠端: ${new URL(effectiveRemoteUrl).hostname}]` : '[後端 API]'} 並廣播...`, true);
+    
     try {
       const reasonParam = encodeURIComponent(customReason || '');
-      // 串接 groupId 參數，若為 default 則不傳 (讓後端用 env)
       const groupParam = selectedGroupId === 'default' ? '' : `&groupId=${selectedGroupId}`;
-      const url = `/api/cron?manual=true&type=${type}&date=${previewDate}&reason=${reasonParam}${groupParam}`;
+      
+      // 若有 Remote URL 則使用之，否則使用相對路徑
+      const baseUrl = effectiveRemoteUrl || '';
+      const url = `${baseUrl}/api/cron?manual=true&type=${type}&date=${previewDate}&reason=${reasonParam}${groupParam}`;
 
       const response = await fetch(url, {
         method: 'GET',
@@ -217,11 +261,11 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       });
 
       if (response.status === 404) {
-         addLog(`⚠️ 偵測到預覽環境 (404)`, null);
-         setTimeout(() => {
-             addLog(`ℹ️ 本機無後端，無法實際發送 LINE。`, null);
-             addLog(`💡 請部署至 Vercel 後再測試。`, null);
-         }, 400);
+         addLog(`❌ 找不到 API (404)`, false);
+         if (isLocalhost) {
+             addLog(`💡 請確認上方「正式站台網址」是否正確。`, null);
+             setShowConfig(true); // 自動展開設定
+         }
          setIsTriggering(false);
          return;
       }
@@ -250,6 +294,10 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       }
     } catch (error: any) {
       addLog(`❌ 連線異常：${error.message}`, false);
+      if (error.message.includes('Failed to fetch')) {
+          addLog(`⚠️ 跨域錯誤或網址無效。`, null);
+          addLog(`💡 請確認該站台已部署且支援 CORS。`, null);
+      }
     } finally {
       setIsTriggering(false);
     }
@@ -272,12 +320,21 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                 <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-wider">Command & Control Dashboard</p>
             </div>
           </div>
-          <button 
-            onClick={onClose}
-            className="text-slate-400 hover:text-white hover:bg-white/10 p-2 rounded-full transition-colors"
-          >
-            <X size={20} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+                onClick={() => setShowConfig(!showConfig)}
+                className={`p-2 rounded-full transition-colors ${showConfig ? 'bg-indigo-500 text-white' : 'text-slate-400 hover:text-white hover:bg-white/10'}`}
+                title="連線設定"
+            >
+                <Settings size={20} />
+            </button>
+            <button 
+                onClick={onClose}
+                className="text-slate-400 hover:text-white hover:bg-white/10 p-2 rounded-full transition-colors"
+            >
+                <X size={20} />
+            </button>
+          </div>
         </div>
 
         {/* Dashboard Layout */}
@@ -286,6 +343,41 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
             {/* Left Panel: Controls */}
             <div className="flex flex-col gap-4 overflow-y-auto pr-2">
                 
+                {/* Localhost Warning Banner & Remote Config */}
+                {showConfig && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 shadow-sm animate-in slide-in-from-top-2">
+                        <div className="flex items-start gap-3 mb-3">
+                             <div className="p-2 bg-amber-100 rounded-lg text-amber-600 shrink-0">
+                                <Laptop2 size={20} />
+                            </div>
+                            <div>
+                                <h3 className="text-sm font-bold text-amber-800 mb-1">連線設定 (Connection Config)</h3>
+                                <p className="text-xs text-amber-700 leading-relaxed">
+                                    若您在本機環境 (Local) 或後端 API 路徑不同，請輸入完整網址以進行遠端呼叫。
+                                </p>
+                            </div>
+                        </div>
+                        
+                        <div className="relative">
+                             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <Globe size={14} className="text-amber-500" />
+                            </div>
+                            <input 
+                                type="text" 
+                                value={remoteUrl}
+                                onChange={handleRemoteUrlChange}
+                                placeholder="請輸入正式站台網址，例：https://myapp.vercel.app"
+                                className="w-full pl-9 pr-3 py-2 text-xs border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none bg-white placeholder-slate-400"
+                            />
+                        </div>
+                        {isLocalhost && !remoteUrl && (
+                             <div className="mt-2 text-[10px] text-amber-600 font-bold text-right">
+                                * 目前為模擬模式 (Simulation Mode)
+                             </div>
+                        )}
+                    </div>
+                )}
+
                 {/* 1. Target Group Selection */}
                 <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
                     <div className="flex items-center justify-between mb-3">
@@ -432,11 +524,12 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                         <button 
                             onClick={() => handleManualTrigger('weekly')}
                             disabled={isTriggering}
-                            className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-bold bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-50 hover:border-emerald-300 shadow-sm active:scale-[0.98] group disabled:opacity-50 disabled:cursor-not-allowed"
+                            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-bold bg-white border shadow-sm active:scale-[0.98] group disabled:opacity-50 disabled:cursor-not-allowed
+                                ${isLocalhost && !remoteUrl ? 'text-slate-600 border-slate-300 hover:bg-slate-50' : 'text-emerald-700 border-emerald-200 hover:bg-emerald-50 hover:border-emerald-300'}`}
                         >
                             <span className="flex items-center gap-2">
                                 <MessageSquare className="w-4 h-4" />
-                                發送輪值公告
+                                {isLocalhost && !remoteUrl ? '模擬輪值公告' : '發送輪值公告'}
                             </span>
                             <ArrowRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
                         </button>
@@ -444,11 +537,12 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                         <button 
                             onClick={() => handleManualTrigger('suspend')}
                             disabled={isTriggering}
-                            className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-bold bg-white text-rose-700 border border-rose-200 hover:bg-rose-50 hover:border-rose-300 shadow-sm active:scale-[0.98] group disabled:opacity-50 disabled:cursor-not-allowed"
+                            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-bold bg-white border shadow-sm active:scale-[0.98] group disabled:opacity-50 disabled:cursor-not-allowed
+                                ${isLocalhost && !remoteUrl ? 'text-slate-600 border-slate-300 hover:bg-slate-50' : 'text-rose-700 border-rose-200 hover:bg-rose-50 hover:border-rose-300'}`}
                         >
                             <span className="flex items-center gap-2">
                                 <StopCircle className="w-4 h-4" />
-                                發送暫停公告
+                                {isLocalhost && !remoteUrl ? '模擬暫停公告' : '發送暫停公告'}
                             </span>
                             <ArrowRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
                         </button>
@@ -501,8 +595,8 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                         </div>
                         <div className="flex gap-2">
                              <span className="flex items-center gap-1 text-[9px] text-slate-500">
-                                <div className={`w-1.5 h-1.5 rounded-full ${window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? 'bg-amber-500' : 'bg-emerald-500'}`}></div>
-                                {window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? 'Local' : 'Live'}
+                                <div className={`w-1.5 h-1.5 rounded-full ${isLocalhost && !remoteUrl ? 'bg-amber-500' : 'bg-emerald-500'}`}></div>
+                                {isLocalhost && !remoteUrl ? 'Simulation Mode' : remoteUrl ? 'Remote Mode' : 'Production'}
                              </span>
                         </div>
                     </div>
