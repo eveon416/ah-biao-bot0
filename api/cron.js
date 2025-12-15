@@ -149,14 +149,16 @@ export default async function handler(req, res) {
   // 2. 檢查 LINE 設定
   const channelAccessToken = process.env.CHANNEL_ACCESS_TOKEN;
   const channelSecret = process.env.CHANNEL_SECRET;
-  const targetGroupId = process.env.LINE_GROUP_ID;
+  
+  // 允許從 Query 參數指定群組 ID (供手動選擇用)，若無則使用預設環境變數
+  const targetGroupId = req.query.groupId || process.env.LINE_GROUP_ID;
 
   if (!channelAccessToken || !channelSecret) {
     return res.status(500).json({ success: false, message: '錯誤：未設定 CHANNEL_ACCESS_TOKEN 或 CHANNEL_SECRET' });
   }
 
   if (!targetGroupId) {
-    return res.status(500).json({ success: false, message: '錯誤：未設定 LINE_GROUP_ID' });
+    return res.status(500).json({ success: false, message: '錯誤：未指定目標群組 ID (Env Var 或 Query Param)' });
   }
 
   try {
@@ -172,12 +174,10 @@ export default async function handler(req, res) {
     // 計算目標日期
     let baseDate = new Date();
     if (targetDateStr) {
-        // 強制解析 YYYY-MM-DD，避免時區問題
-        // 例如 2025-05-01 -> 2025-05-01T00:00:00.000Z
         baseDate = new Date(targetDateStr);
     }
     
-    // 轉換為台灣時間進行計算 (若 Server 為 UTC，+8hr)
+    // 轉換為台灣時間進行計算
     const taiwanNow = new Date(baseDate.getTime() + (8 * 60 * 60 * 1000));
 
     let effectiveType = actionType;
@@ -215,18 +215,31 @@ export default async function handler(req, res) {
         await client.pushMessage(targetGroupId, flexMsg);
     } catch (lineError) {
         console.error('LINE API Error:', lineError);
-        // 捕捉常見錯誤並回傳更友善的訊息
-        if (lineError.statusCode === 400) {
-            return res.status(500).json({ success: false, message: '發送失敗：無效的 Group ID 或參數錯誤' });
+        
+        let errorMsg = `發送失敗：未知錯誤 (${lineError.statusCode})`;
+        
+        // 嘗試解析詳細錯誤訊息 (例如機器人未入群)
+        if (lineError.originalError && lineError.originalError.response && lineError.originalError.response.data) {
+             const detail = lineError.originalError.response.data.message || '';
+             // LINE 常見錯誤：The bot is not a member of the group
+             if (detail.includes('not a member') || detail.includes('count')) {
+                 errorMsg = '發送失敗：機器人未加入該群組，請先邀請機器人。';
+             } else if (detail.includes('invalid') || detail.includes('to')) {
+                 errorMsg = `發送失敗：無效的 Group ID (${targetGroupId})`;
+             }
+        } else if (lineError.statusCode === 400) {
+            errorMsg = `發送失敗：無效的請求 (400)`;
         } else if (lineError.statusCode === 401 || lineError.statusCode === 403) {
-            return res.status(500).json({ success: false, message: '發送失敗：Token 無效或權限不足' });
+            errorMsg = '發送失敗：Token 無效或權限不足';
         }
-        throw lineError;
+
+        return res.status(500).json({ success: false, message: errorMsg });
     }
     
     return res.status(200).json({ 
         success: true, 
-        message: logMessage, 
+        message: logMessage,
+        targetGroup: targetGroupId, // 回傳實際發送的 ID 供前端確認
         type: effectiveType,
         targetDate: taiwanNow.toISOString()
     });

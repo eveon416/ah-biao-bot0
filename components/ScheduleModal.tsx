@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Calendar, Clock, UserCircle, Play, StopCircle, Terminal, AlertOctagon, Info, MessageSquare, Edit3, CheckCircle2, ArrowRight, Server, AlertTriangle } from 'lucide-react';
+import { X, Calendar, Clock, UserCircle, Play, StopCircle, Terminal, AlertOctagon, Info, MessageSquare, Edit3, CheckCircle2, ArrowRight, Server, Users, Plus, Trash2, Save, AlertTriangle, HelpCircle } from 'lucide-react';
 
 interface ScheduleModalProps {
   isOpen: boolean;
@@ -8,18 +8,33 @@ interface ScheduleModalProps {
   onGenerate: (type: 'weekly' | 'suspend', info: string) => void;
 }
 
+interface SavedGroup {
+  id: string;
+  name: string;
+  groupId: string;
+}
+
 const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenerate }) => {
   const [previewDate, setPreviewDate] = useState<string>('');
   const [dutyPerson, setDutyPerson] = useState<string>('');
   const [isSkipWeek, setIsSkipWeek] = useState(false);
   const [customReason, setCustomReason] = useState('');
   
+  // Group Management State
+  const [savedGroups, setSavedGroups] = useState<SavedGroup[]>([]);
+  const [selectedGroupId, setSelectedGroupId] = useState<string>('default'); // 'default' = use env var
+  const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupId, setNewGroupId] = useState('');
+  const [isAddingGroup, setIsAddingGroup] = useState(false);
+  const [idError, setIdError] = useState('');
+
   // Manual Trigger State
   const [isTriggering, setIsTriggering] = useState(false);
   // success 狀態: true=綠, false=紅, null=黃(警告/模擬)
   const [logs, setLogs] = useState<Array<{time: string, msg: string, success: boolean | null}>>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
+  // Initialize
   useEffect(() => {
     if (isOpen) {
       const today = new Date();
@@ -28,6 +43,14 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       const dd = String(today.getDate()).padStart(2, '0');
       setPreviewDate(`${yyyy}-${mm}-${dd}`);
       setCustomReason(''); 
+      
+      // Load saved groups from localStorage
+      const saved = localStorage.getItem('line_groups_v1');
+      if (saved) {
+        try {
+            setSavedGroups(JSON.parse(saved));
+        } catch (e) { console.error('Failed to parse groups', e); }
+      }
     }
   }, [isOpen]);
 
@@ -41,9 +64,57 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
+  // ID Validation Logic
+  useEffect(() => {
+      if (!newGroupId) {
+          setIdError('');
+          return;
+      }
+      // LINE ID Regex: Starts with U, C, or R, followed by 32 hex chars (total 33 chars)
+      const isValid = /^[UCR][0-9a-f]{32}$/.test(newGroupId);
+      if (!isValid) {
+          setIdError('格式錯誤：需以 U/C/R 開頭，共 33 碼');
+      } else {
+          setIdError('');
+      }
+  }, [newGroupId]);
+
   const addLog = (msg: string, success: boolean | null) => {
     const time = new Date().toLocaleTimeString('zh-TW', { hour12: false });
     setLogs(prev => [...prev, { time, msg, success }]);
+  };
+
+  const handleSaveGroup = () => {
+      if (!newGroupName.trim() || !newGroupId.trim() || idError) return;
+      
+      // Check for duplicate ID
+      if (savedGroups.some(g => g.groupId === newGroupId.trim())) {
+          alert('此 Group ID 已存在於清單中');
+          return;
+      }
+
+      const newGroup: SavedGroup = {
+          id: Date.now().toString(),
+          name: newGroupName.trim(),
+          groupId: newGroupId.trim()
+      };
+      const updated = [...savedGroups, newGroup];
+      setSavedGroups(updated);
+      localStorage.setItem('line_groups_v1', JSON.stringify(updated));
+      setNewGroupName('');
+      setNewGroupId('');
+      setIsAddingGroup(false);
+      setSelectedGroupId(newGroup.groupId); // Auto select new group
+  };
+
+  const handleDeleteGroup = (id: string) => {
+      if (!window.confirm('確定要刪除此群組設定嗎？')) return;
+      const updated = savedGroups.filter(g => g.id !== id);
+      setSavedGroups(updated);
+      localStorage.setItem('line_groups_v1', JSON.stringify(updated));
+      if (selectedGroupId === savedGroups.find(g => g.id === id)?.groupId) {
+          setSelectedGroupId('default');
+      }
   };
 
   // 核心邏輯：計算輪值
@@ -111,11 +182,15 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
     setIsTriggering(true);
     
     const typeLabel = type === 'weekly' ? '輪值公告' : '暫停公告';
-    addLog(`正在連線並廣播 ${typeLabel}...`, true);
+    const targetName = selectedGroupId === 'default' 
+        ? '預設主群組' 
+        : (savedGroups.find(g => g.groupId === selectedGroupId)?.name || '指定群組');
+
+    addLog(`正在連線至 [${targetName}] 並廣播 ${typeLabel}...`, true);
 
     const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
-    // 1. 本機 UI 擬稿 (左側聊天視窗)
+    // 1. 本機 UI 擬稿
     try {
         if (type === 'weekly') {
             if (isSkipWeek) {
@@ -129,50 +204,47 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
         }
     } catch(e) { console.error(e); }
 
-    // 2. 嘗試呼叫後端 API
+    // 2. 呼叫後端 API
     try {
       const reasonParam = encodeURIComponent(customReason || '');
-      const url = `/api/cron?manual=true&type=${type}&date=${previewDate}&reason=${reasonParam}`;
+      // 串接 groupId 參數，若為 default 則不傳 (讓後端用 env)
+      const groupParam = selectedGroupId === 'default' ? '' : `&groupId=${selectedGroupId}`;
+      const url = `/api/cron?manual=true&type=${type}&date=${previewDate}&reason=${reasonParam}${groupParam}`;
 
-      // 使用 fetch 呼叫
       const response = await fetch(url, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' }
       });
 
-      // 狀況 A: 404 Not Found (通常是前端預覽環境，沒有後端 API)
       if (response.status === 404) {
          addLog(`⚠️ 偵測到預覽環境 (404)`, null);
          setTimeout(() => {
-             addLog(`ℹ️ 本機無後端 API，LINE 訊息無法送出。`, null);
-             addLog(`💡 請部署至 Vercel 並設定 LINE_GROUP_ID。`, null);
+             addLog(`ℹ️ 本機無後端，無法實際發送 LINE。`, null);
+             addLog(`💡 請部署至 Vercel 後再測試。`, null);
          }, 400);
          setIsTriggering(false);
          return;
       }
 
-      // 狀況 B: 500 Server Error (通常是環境變數沒設定)
       let data;
       try {
         data = await response.json();
       } catch (e) {
-        // 如果連 JSON 都解析不出來
         throw new Error(`伺服器回傳格式錯誤 (${response.status})`);
       }
 
       if (response.status === 500) {
-          addLog(`❌ 後端設定錯誤`, false);
-          addLog(`📝 原因：${data.message}`, false);
-          if (data.message.includes('LINE_GROUP_ID')) {
-              addLog(`💡 請至 Vercel 後台設定環境變數。`, null);
+          addLog(`❌ 發送失敗`, false);
+          addLog(`📝 原因: ${data.message}`, false);
+          if (data.message.includes('機器人未加入') || data.message.includes('not a member')) {
+               addLog(`💡 請檢查機器人是否已在群組內`, null);
           }
           setIsTriggering(false);
           return;
       }
 
-      // 狀況 C: 成功
       if (response.ok && data.success) {
-        addLog(`✅ LINE 廣播成功：${data.message}`, true);
+        addLog(`✅ 廣播成功 (目標: ${targetName})`, true);
       } else {
         addLog(`❌ 發送失敗：${data.message || '未知錯誤'}`, false);
       }
@@ -211,90 +283,181 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
         {/* Dashboard Layout */}
         <div className="flex-1 overflow-hidden p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
             
-            {/* Left Panel */}
-            <div className="flex flex-col gap-6 overflow-y-auto pr-2">
+            {/* Left Panel: Controls */}
+            <div className="flex flex-col gap-4 overflow-y-auto pr-2">
                 
-                {/* 1. Date Selection */}
-                <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-                    <h3 className="flex items-center gap-2 font-bold text-slate-800 mb-4 text-sm uppercase tracking-wider">
-                        <Clock className="w-4 h-4 text-indigo-500" />
-                        基準日期設定
-                    </h3>
-                    <div className="space-y-3">
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 mb-1.5 ml-1">選擇擬稿日期</label>
+                {/* 1. Target Group Selection */}
+                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                    <div className="flex items-center justify-between mb-3">
+                        <h3 className="flex items-center gap-2 font-bold text-slate-800 text-sm uppercase tracking-wider">
+                            <Users className="w-4 h-4 text-sky-500" />
+                            發送對象 (群組通訊錄)
+                        </h3>
+                        <button 
+                            onClick={() => setIsAddingGroup(!isAddingGroup)}
+                            className="text-xs flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-medium px-2 py-1 rounded hover:bg-indigo-50 transition-colors"
+                        >
+                            {isAddingGroup ? <X size={14}/> : <Plus size={14}/>}
+                            {isAddingGroup ? '取消' : '新增'}
+                        </button>
+                    </div>
+
+                    {/* Add Group Form */}
+                    {isAddingGroup && (
+                        <div className="mb-4 bg-slate-50 p-3 rounded-lg border border-slate-200 animate-in slide-in-from-top-2">
+                             <div className="flex items-start gap-2 mb-3 bg-amber-50 p-2 rounded text-[10px] text-amber-700 leading-tight">
+                                <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                                <span>請確保機器人<strong>已加入</strong>該群組，否則無法發送。ID 格式為 C/R/U 開頭共 33 碼。</span>
+                            </div>
+
+                            <div className="space-y-2 mb-2">
+                                <input 
+                                    type="text" 
+                                    placeholder="群組名稱 (例: 會計室)" 
+                                    value={newGroupName}
+                                    onChange={(e) => setNewGroupName(e.target.value)}
+                                    className="w-full text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-indigo-500 outline-none"
+                                />
+                                <div className="relative">
+                                    <input 
+                                        type="text" 
+                                        placeholder="群組 ID (例: C123...)" 
+                                        value={newGroupId}
+                                        onChange={(e) => setNewGroupId(e.target.value)}
+                                        className={`w-full text-xs px-2 py-1.5 rounded border outline-none font-mono
+                                            ${idError ? 'border-rose-300 focus:border-rose-500 bg-rose-50' : 'border-slate-300 focus:border-indigo-500'}`}
+                                    />
+                                    {idError && <span className="text-[9px] text-rose-500 absolute right-2 top-2">{idError}</span>}
+                                </div>
+                            </div>
+                            <button 
+                                onClick={handleSaveGroup}
+                                disabled={!newGroupName || !newGroupId || !!idError}
+                                className="w-full flex items-center justify-center gap-1 bg-indigo-600 text-white text-xs py-1.5 rounded hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors"
+                            >
+                                <Save size={12} />
+                                儲存至通訊錄
+                            </button>
+                        </div>
+                    )}
+
+                    {/* Group List */}
+                    <div className="space-y-2 max-h-32 overflow-y-auto pr-1">
+                        <label className={`flex items-center gap-3 p-2 rounded-lg border cursor-pointer transition-all
+                            ${selectedGroupId === 'default' ? 'bg-indigo-50 border-indigo-200 ring-1 ring-indigo-500/20' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
                             <input 
-                                type="date" 
-                                value={previewDate}
-                                onChange={(e) => setPreviewDate(e.target.value)}
-                                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-800 font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
+                                type="radio" 
+                                name="targetGroup" 
+                                value="default"
+                                checked={selectedGroupId === 'default'}
+                                onChange={() => setSelectedGroupId('default')}
+                                className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
                             />
-                        </div>
-                        <div className="text-[11px] text-slate-500 bg-blue-50 p-3 rounded-lg border border-blue-100 flex items-start gap-2 leading-relaxed">
-                            <Info size={14} className="shrink-0 mt-0.5 text-blue-500" />
-                            <p>系統已自動鎖定 <strong>2025/1/27</strong> 及 <strong>2026/2/16</strong> 為春節暫停週。若選擇此區間，下方將自動切換為暫停模式。</p>
-                        </div>
+                            <div className="flex-1">
+                                <div className="text-sm font-bold text-slate-700">預設主群組 (Env)</div>
+                                <div className="text-[10px] text-slate-400">使用 Vercel 環境變數設定</div>
+                            </div>
+                        </label>
+
+                        {savedGroups.map(group => (
+                            <div key={group.id} className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-all group
+                                ${selectedGroupId === group.groupId ? 'bg-indigo-50 border-indigo-200 ring-1 ring-indigo-500/20' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+                                <label className="flex items-center gap-3 flex-1 cursor-pointer">
+                                    <input 
+                                        type="radio" 
+                                        name="targetGroup" 
+                                        value={group.groupId}
+                                        checked={selectedGroupId === group.groupId}
+                                        onChange={() => setSelectedGroupId(group.groupId)}
+                                        className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
+                                    />
+                                    <div className="min-w-0">
+                                        <div className="text-sm font-bold text-slate-700 truncate">{group.name}</div>
+                                        <div className="text-[10px] text-slate-400 truncate font-mono">{group.groupId}</div>
+                                    </div>
+                                </label>
+                                <button 
+                                    onClick={() => handleDeleteGroup(group.id)}
+                                    className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded transition-colors opacity-0 group-hover:opacity-100"
+                                    title="刪除"
+                                >
+                                    <Trash2 size={14} />
+                                </button>
+                            </div>
+                        ))}
                     </div>
                 </div>
 
-                {/* 2. Actions */}
-                <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex-1 flex flex-col">
-                     <h3 className="flex items-center gap-2 font-bold text-slate-800 mb-4 text-sm uppercase tracking-wider">
+                {/* 2. Date Selection */}
+                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                    <h3 className="flex items-center gap-2 font-bold text-slate-800 mb-2 text-sm uppercase tracking-wider">
+                        <Clock className="w-4 h-4 text-indigo-500" />
+                        日期設定
+                    </h3>
+                    <div className="space-y-2">
+                        <input 
+                            type="date" 
+                            value={previewDate}
+                            onChange={(e) => setPreviewDate(e.target.value)}
+                            className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-800 text-sm focus:border-indigo-500 outline-none"
+                        />
+                        {isSkipWeek && (
+                            <div className="text-[10px] text-rose-500 font-bold flex items-center gap-1 bg-rose-50 p-2 rounded">
+                                <AlertOctagon size={12} />
+                                系統提示：選定日期為春節暫停週
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* 3. Actions */}
+                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex-1 flex flex-col">
+                     <h3 className="flex items-center gap-2 font-bold text-slate-800 mb-3 text-sm uppercase tracking-wider">
                         <Edit3 className="w-4 h-4 text-rose-500" />
-                        公告生成設定
+                        發送操作
                     </h3>
                     
-                    <div className="mb-6">
-                        <label className="block text-xs font-bold text-slate-500 mb-1.5 ml-1 flex justify-between">
-                            <span>暫停事由 (若欲發送暫停公告請填寫)</span>
-                            <span className="text-slate-400 font-normal">非必填</span>
-                        </label>
+                    <div className="mb-4">
                         <input 
                             type="text" 
                             value={customReason}
                             onChange={(e) => setCustomReason(e.target.value)}
-                            placeholder="例如：颱風停班停課、辦公室整修、春節連假..."
-                            className={`w-full px-3 py-2.5 bg-slate-50 border rounded-lg text-slate-800 transition-all outline-none
-                                ${isSkipWeek ? 'border-rose-300 ring-2 ring-rose-500/10' : 'border-slate-300 focus:border-rose-400 focus:ring-2 focus:ring-rose-500/10'}`}
+                            placeholder="暫停事由 (選填，例: 颱風)"
+                            className={`w-full px-3 py-2 bg-slate-50 border rounded-lg text-slate-800 text-sm outline-none
+                                ${isSkipWeek ? 'border-rose-300' : 'border-slate-300 focus:border-rose-400'}`}
                         />
-                        {isSkipWeek && (
-                            <p className="mt-1.5 text-[10px] text-rose-500 font-bold flex items-center gap-1">
-                                <AlertOctagon size={10} />
-                                系統偵測為暫停週，已自動帶入建議事由。
-                            </p>
-                        )}
                     </div>
 
-                    <div className="grid grid-cols-1 gap-3 mt-auto">
+                    <div className="grid grid-cols-1 gap-2 mt-auto">
                         <button 
                             onClick={() => handleManualTrigger('weekly')}
                             disabled={isTriggering}
-                            className="w-full flex items-center justify-between px-4 py-3 rounded-lg text-sm font-bold transition-all bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-50 hover:border-emerald-300 shadow-sm active:scale-[0.98] group"
+                            className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-bold bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-50 hover:border-emerald-300 shadow-sm active:scale-[0.98] group disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <span className="flex items-center gap-2">
                                 <MessageSquare className="w-4 h-4" />
-                                生成並發送本週輪值公告
+                                發送輪值公告
                             </span>
-                            <ArrowRight size={16} className="opacity-0 group-hover:opacity-100 transition-opacity transform group-hover:translate-x-1" />
+                            <ArrowRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
                         </button>
 
                         <button 
                             onClick={() => handleManualTrigger('suspend')}
                             disabled={isTriggering}
-                            className="w-full flex items-center justify-between px-4 py-3 rounded-lg text-sm font-bold transition-all bg-white text-rose-700 border border-rose-200 hover:bg-rose-50 hover:border-rose-300 shadow-sm active:scale-[0.98] group"
+                            className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-bold bg-white text-rose-700 border border-rose-200 hover:bg-rose-50 hover:border-rose-300 shadow-sm active:scale-[0.98] group disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <span className="flex items-center gap-2">
                                 <StopCircle className="w-4 h-4" />
-                                生成並發送暫停辦理公告
+                                發送暫停公告
                             </span>
-                            <ArrowRight size={16} className="opacity-0 group-hover:opacity-100 transition-opacity transform group-hover:translate-x-1" />
+                            <ArrowRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
                         </button>
                     </div>
                 </div>
 
             </div>
 
-            {/* Right Panel */}
+            {/* Right Panel: Preview & Logs */}
             <div className="flex flex-col gap-6 h-full overflow-hidden">
                 
                 {/* 1. Preview Card */}
@@ -309,11 +472,11 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                    <div className="relative z-10">
                         <span className={`inline-block px-3 py-1 rounded-full text-[10px] font-bold tracking-widest uppercase mb-3 border
                             ${isSkipWeek ? 'bg-rose-100 text-rose-600 border-rose-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
-                            Status Preview
+                            Preview
                         </span>
                         
                         <h4 className={`text-sm font-bold mb-2 ${isSkipWeek ? 'text-rose-400' : 'text-slate-400'}`}>
-                            該週預定狀態
+                            {selectedGroupId === 'default' ? '發送至: 預設群組 (Env)' : `發送至: ${savedGroups.find(g => g.groupId === selectedGroupId)?.name || '未知群組'}`}
                         </h4>
                         
                         <div className={`text-3xl sm:text-4xl font-bold official-font mb-2 transition-all duration-300
@@ -326,13 +489,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                 事由：{customReason}
                              </div>
                         ) : null}
-
-                        {!isSkipWeek && (
-                            <div className="mt-4 flex items-center gap-2 text-xs text-slate-400 bg-slate-50 px-3 py-1.5 rounded-full border border-slate-100">
-                                <CheckCircle2 size={12} className="text-emerald-500" />
-                                輪值順序正常
-                            </div>
-                        )}
                    </div>
                 </div>
 
@@ -341,12 +497,12 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                     <div className="flex items-center justify-between border-b border-slate-700 pb-2 mb-2 text-slate-400 uppercase tracking-widest text-[9px]">
                         <div className="flex items-center gap-2">
                             <Terminal size={12} className="text-emerald-500" />
-                            System Activity Log
+                            Activity Log
                         </div>
                         <div className="flex gap-2">
                              <span className="flex items-center gap-1 text-[9px] text-slate-500">
                                 <div className={`w-1.5 h-1.5 rounded-full ${window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? 'bg-amber-500' : 'bg-emerald-500'}`}></div>
-                                {window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? 'Local Mode' : 'Connected'}
+                                {window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? 'Local' : 'Live'}
                              </span>
                         </div>
                     </div>
@@ -354,7 +510,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                         {logs.length === 0 && (
                             <div className="flex flex-col items-center justify-center h-full text-slate-600 italic gap-2">
                                 <Server size={16} className="opacity-20" />
-                                <span>等待指令輸入...</span>
+                                <span>Ready...</span>
                             </div>
                         )}
                         {logs.map((log, idx) => (
