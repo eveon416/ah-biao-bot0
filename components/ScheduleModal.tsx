@@ -71,8 +71,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
     }
     
     // 若不是 Skip Week，清空理由 (除非使用者自己打字，這裡我們選擇切換日期就清空，避免混淆)
-    // 但為了體驗好一點，如果使用者已經輸入了文字，切換日期時保留文字？
-    // 這裡策略：如果是「系統偵測到的正常週」，且原本理由是「春節」，則清空。
     setIsSkipWeek(false);
     if (customReason === "農曆春節連假") {
         setCustomReason("");
@@ -117,32 +115,67 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
     setIsTriggering(true);
     
     const typeLabel = type === 'weekly' ? '輪值公告' : '暫停公告';
-    addLog(`正在擬定 ${typeLabel}...`, true);
+    addLog(`正在執行 ${typeLabel} 廣播程序...`, true);
 
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
+    // 1. 本機預覽 (左側聊天視窗)
     try {
         if (type === 'weekly') {
             if (isSkipWeek) {
-                // 若系統判定是暫停週，但使用者硬要按輪值，給予警示後轉為暫停
-                addLog(`⚠️ 偵測到 ${customReason || '暫停週'}，已轉為暫停公告`, false);
-                const finalReason = customReason.trim() || '國定假日或特殊事由';
-                onGenerate('suspend', finalReason);
+                onGenerate('suspend', customReason || '春節/國定假日');
             } else {
                 onGenerate('weekly', dutyPerson);
             }
         } else {
-            // 強制暫停：使用使用者輸入的理由
-            const finalReason = customReason.trim() || '特殊行政事由';
-            onGenerate('suspend', finalReason);
+             const finalReason = customReason.trim() || '特殊行政事由';
+             onGenerate('suspend', finalReason);
         }
-        
-        setTimeout(() => {
-             addLog(`✅ 擬稿完成！請查看主視窗`, true);
-             setIsTriggering(false);
-        }, 600);
+    } catch(e) { console.error(e); }
 
-    } catch (e) {
-        addLog(`❌ 擬稿失敗`, false);
+    // 2. 本機環境不發送 API，直接模擬
+    if (isLocalhost) {
+      setTimeout(() => {
+        addLog(`(本機模擬) LINE 公告已發送至測試群組`, true);
         setIsTriggering(false);
+      }, 1000);
+      return;
+    }
+
+    // 3. 正式發送 API
+    try {
+      // 建構參數：加入 manual=true, type, date, reason
+      const reasonParam = encodeURIComponent(customReason || '');
+      const url = `/api/cron?manual=true&type=${type}&date=${previewDate}&reason=${reasonParam}`;
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      // 針對 404 (預覽環境/API未部署) 的友善處理
+      if (response.status === 404) {
+         addLog(`(預覽模擬) LINE 發送請求已送出 (404 Mode)`, true);
+         setIsTriggering(false);
+         return;
+      }
+
+      let data;
+      try {
+        data = await response.json();
+      } catch (e) {
+        throw new Error(`伺服器無回應 (${response.status})`);
+      }
+
+      if (response.ok && data.success) {
+        addLog(`✅ LINE 廣播成功：${data.message}`, true);
+      } else {
+        addLog(`❌ 發送失敗：${data.message || data.error}`, false);
+      }
+    } catch (error: any) {
+      addLog(`❌ 連線錯誤：${error.message}`, false);
+    } finally {
+      setIsTriggering(false);
     }
   };
 
@@ -237,7 +270,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                         >
                             <span className="flex items-center gap-2">
                                 <MessageSquare className="w-4 h-4" />
-                                生成本週輪值公告
+                                生成並發送本週輪值公告
                             </span>
                             <ArrowRight size={16} className="opacity-0 group-hover:opacity-100 transition-opacity transform group-hover:translate-x-1" />
                         </button>
@@ -249,7 +282,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                         >
                             <span className="flex items-center gap-2">
                                 <StopCircle className="w-4 h-4" />
-                                生成暫停辦理公告
+                                生成並發送暫停辦理公告
                             </span>
                             <ArrowRight size={16} className="opacity-0 group-hover:opacity-100 transition-opacity transform group-hover:translate-x-1" />
                         </button>

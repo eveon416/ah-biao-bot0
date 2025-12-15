@@ -10,8 +10,7 @@ function isSkipWeek(dateObj) {
     const year = dateObj.getFullYear();
     const month = String(dateObj.getMonth() + 1).padStart(2, '0');
     const day = String(dateObj.getDate()).padStart(2, '0');
-    // 這裡簡化比對：若當天所在的週一 matches SKIP_WEEKS
-    // 為求精確，我們計算該日期距離週一的 offset
+    
     const dayOfWeek = dateObj.getDay(); // 0(Sun) - 6(Sat)
     const diffToMon = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek;
     const monday = new Date(dateObj);
@@ -36,7 +35,6 @@ function getEffectiveWeeksDiff(targetDate, anchorDate) {
     const start = rawDiffTime > 0 ? anchorDate : targetDate;
     const end = rawDiffTime > 0 ? targetDate : anchorDate;
 
-    // 簡單迴圈檢查每個 SKIP_WEEK 是否落在區間內
     SKIP_WEEKS.forEach(skipDateStr => {
         const skipDate = new Date(skipDateStr + 'T00:00:00+08:00');
         if (skipDate >= start && skipDate < end) {
@@ -52,10 +50,16 @@ function getEffectiveWeeksDiff(targetDate, anchorDate) {
 }
 
 // 輔助函式：建立輪值 Flex Message (正常版)
-function createRosterFlex(dutyPerson) {
+function createRosterFlex(dutyPerson, dateStr) {
+  // 簡單處理日期顯示，讓公告看起來更具體
+  const dateObj = new Date(dateStr);
+  const month = dateObj.getMonth() + 1;
+  const day = dateObj.getDate();
+  const dateLabel = isNaN(month) ? "本週" : `${month}/${day} 當週`;
+
   return {
     type: 'flex',
-    altText: `📢 行政科週知：本週輪值 ${dutyPerson}`,
+    altText: `📢 行政科週知：${dateLabel}輪值 ${dutyPerson}`,
     contents: {
       type: "bubble",
       size: "giga",
@@ -162,7 +166,8 @@ function createRosterFlex(dutyPerson) {
 }
 
 // 輔助函式：建立暫停公告 Flex Message (暫停版)
-function createSuspendFlex(reason = "國定假日或特殊事由") {
+function createSuspendFlex(reason) {
+  const displayReason = reason || "國定假日或特殊事由";
   return {
     type: 'flex',
     altText: `⛔ 行政科週知：本週科務會議暫停辦理`,
@@ -197,12 +202,13 @@ function createSuspendFlex(reason = "國定假日或特殊事由") {
           },
           {
             type: "text",
-            text: `因適逢${reason}`,
+            text: `因適逢${displayReason}`,
             color: "#334155",
             size: "md",
             weight: "bold",
             align: "center",
-            margin: "lg"
+            margin: "lg",
+            wrap: true
           },
           {
             type: "text",
@@ -252,6 +258,8 @@ function createSuspendFlex(reason = "國定假日或特殊事由") {
 export default async function handler(req, res) {
   const isManualRun = req.query.manual === 'true';
   const actionType = req.query.type || 'weekly'; 
+  const customReason = req.query.reason || ''; // 接收自訂理由
+  const targetDateStr = req.query.date; // 接收指定日期 (YYYY-MM-DD)
 
   const authHeader = req.headers['authorization'];
   
@@ -276,20 +284,31 @@ export default async function handler(req, res) {
     let flexMsg;
     let logMessage = "";
     
-    // 取得當前台灣時間
-    const now = new Date();
-    const taiwanNow = new Date(now.getTime() + (8 * 60 * 60 * 1000));
+    // 計算目標日期
+    let baseDate = new Date();
+    if (targetDateStr) {
+        baseDate = new Date(targetDateStr);
+    }
+    
+    // 轉換為台灣時間進行計算 (若 Server 為 UTC，+8hr)
+    // 若 baseDate 來自 YYYY-MM-DD，則是 UTC 00:00，+8hr 變成當日早上 08:00，日期正確
+    const taiwanNow = new Date(baseDate.getTime() + (8 * 60 * 60 * 1000));
 
     let effectiveType = actionType;
-    if (!isManualRun && isSkipWeek(taiwanNow)) {
-        console.log(`Today ${taiwanNow.toISOString()} is a SKIP WEEK. Switching to suspend notice.`);
+    
+    // 自動排程時檢查 Skip Week，手動觸發則依指令為主(除非強制檢查)
+    // 這裡邏輯：若手動指定 'suspend' 則直接暫停；若 'weekly' 則檢查日期
+    if (effectiveType === 'weekly' && isSkipWeek(taiwanNow)) {
+        console.log(`Target Date ${taiwanNow.toISOString()} is a SKIP WEEK. Switching to suspend notice.`);
         effectiveType = 'suspend';
     }
 
     if (effectiveType === 'suspend') {
         console.log('Running Suspension Announcement...');
-        flexMsg = createSuspendFlex(isSkipWeek(taiwanNow) ? "春節連假或排定休假" : "特殊事由");
-        logMessage = "Suspension Notice Sent";
+        // 優先使用傳入的 customReason，若無則自動判斷
+        const reasonText = customReason || (isSkipWeek(taiwanNow) ? "春節連假或排定休假" : "特殊事由");
+        flexMsg = createSuspendFlex(reasonText);
+        logMessage = `Suspension Notice Sent (Reason: ${reasonText})`;
     } else {
         console.log('Running Weekly Roster Announcement...');
         
@@ -300,15 +319,14 @@ export default async function handler(req, res) {
         const anchorDate = new Date('2025-12-08T00:00:00+08:00'); 
         const anchorIndex = 6;
 
-        // 使用「扣除暫停週」的邏輯計算
         const diffWeeks = getEffectiveWeeksDiff(taiwanNow, anchorDate);
 
         let targetIndex = (anchorIndex + diffWeeks) % staffList.length;
         if (targetIndex < 0) targetIndex = targetIndex + staffList.length;
 
         const dutyPerson = staffList[targetIndex];
-        flexMsg = createRosterFlex(dutyPerson);
-        logMessage = `Weekly Roster Sent. Duty: ${dutyPerson} (Effective Weeks from anchor: ${diffWeeks})`;
+        flexMsg = createRosterFlex(dutyPerson, taiwanNow.toISOString());
+        logMessage = `Weekly Roster Sent. Duty: ${dutyPerson}`;
     }
 
     await client.pushMessage(targetGroupId, flexMsg);
@@ -317,7 +335,7 @@ export default async function handler(req, res) {
         success: true, 
         message: logMessage, 
         type: effectiveType,
-        timestamp: taiwanNow.toISOString()
+        targetDate: taiwanNow.toISOString()
     });
 
   } catch (error) {
