@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Calendar, Clock, UserCircle, Play, StopCircle, Terminal, AlertOctagon, Info, MessageSquare, Edit3, CheckCircle2, ArrowRight } from 'lucide-react';
+import { X, Calendar, Clock, UserCircle, Play, StopCircle, Terminal, AlertOctagon, Info, MessageSquare, Edit3, CheckCircle2, ArrowRight, Server, AlertTriangle } from 'lucide-react';
 
 interface ScheduleModalProps {
   isOpen: boolean;
@@ -16,22 +16,21 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
   
   // Manual Trigger State
   const [isTriggering, setIsTriggering] = useState(false);
-  const [logs, setLogs] = useState<Array<{time: string, msg: string, success: boolean}>>([]);
+  // success 狀態: true=綠, false=紅, null=黃(警告/模擬)
+  const [logs, setLogs] = useState<Array<{time: string, msg: string, success: boolean | null}>>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (isOpen) {
       const today = new Date();
-      // 確保時區正確
       const yyyy = today.getFullYear();
       const mm = String(today.getMonth() + 1).padStart(2, '0');
       const dd = String(today.getDate()).padStart(2, '0');
       setPreviewDate(`${yyyy}-${mm}-${dd}`);
-      setCustomReason(''); // 重置理由
+      setCustomReason(''); 
     }
   }, [isOpen]);
 
-  // 當日期變更時，重新計算，並自動帶入預設理由
   useEffect(() => {
     if (previewDate) {
       calculateDuty(new Date(previewDate));
@@ -42,7 +41,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
-  const addLog = (msg: string, success: boolean) => {
+  const addLog = (msg: string, success: boolean | null) => {
     const time = new Date().toLocaleTimeString('zh-TW', { hour12: false });
     setLogs(prev => [...prev, { time, msg, success }]);
   };
@@ -57,11 +56,9 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
     monday.setDate(targetDate.getDate() + diffToMon);
     const mStr = monday.toISOString().split('T')[0];
 
-    // 判斷是否為內建的暫停週
     if (SKIP_WEEKS.includes(mStr)) {
         setIsSkipWeek(true);
         setDutyPerson("⛔ 本週暫停辦理");
-        // 自動帶入理由，但允許使用者修改
         if (mStr === '2025-01-27' || mStr === '2026-02-16') {
              setCustomReason("農曆春節連假");
         } else {
@@ -70,7 +67,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
         return;
     }
     
-    // 若不是 Skip Week，清空理由 (除非使用者自己打字，這裡我們選擇切換日期就清空，避免混淆)
     setIsSkipWeek(false);
     if (customReason === "農曆春節連假") {
         setCustomReason("");
@@ -115,11 +111,11 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
     setIsTriggering(true);
     
     const typeLabel = type === 'weekly' ? '輪值公告' : '暫停公告';
-    addLog(`正在執行 ${typeLabel} 廣播程序...`, true);
+    addLog(`正在連線並廣播 ${typeLabel}...`, true);
 
     const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
-    // 1. 本機預覽 (左側聊天視窗)
+    // 1. 本機 UI 擬稿 (左側聊天視窗)
     try {
         if (type === 'weekly') {
             if (isSkipWeek) {
@@ -133,47 +129,55 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
         }
     } catch(e) { console.error(e); }
 
-    // 2. 本機環境不發送 API，直接模擬
-    if (isLocalhost) {
-      setTimeout(() => {
-        addLog(`(本機模擬) LINE 公告已發送至測試群組`, true);
-        setIsTriggering(false);
-      }, 1000);
-      return;
-    }
-
-    // 3. 正式發送 API
+    // 2. 嘗試呼叫後端 API
     try {
-      // 建構參數：加入 manual=true, type, date, reason
       const reasonParam = encodeURIComponent(customReason || '');
       const url = `/api/cron?manual=true&type=${type}&date=${previewDate}&reason=${reasonParam}`;
 
+      // 使用 fetch 呼叫
       const response = await fetch(url, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' }
       });
 
-      // 針對 404 (預覽環境/API未部署) 的友善處理
+      // 狀況 A: 404 Not Found (通常是前端預覽環境，沒有後端 API)
       if (response.status === 404) {
-         addLog(`(預覽模擬) LINE 發送請求已送出 (404 Mode)`, true);
+         addLog(`⚠️ 偵測到預覽環境 (404)`, null);
+         setTimeout(() => {
+             addLog(`ℹ️ 本機無後端 API，LINE 訊息無法送出。`, null);
+             addLog(`💡 請部署至 Vercel 並設定 LINE_GROUP_ID。`, null);
+         }, 400);
          setIsTriggering(false);
          return;
       }
 
+      // 狀況 B: 500 Server Error (通常是環境變數沒設定)
       let data;
       try {
         data = await response.json();
       } catch (e) {
-        throw new Error(`伺服器無回應 (${response.status})`);
+        // 如果連 JSON 都解析不出來
+        throw new Error(`伺服器回傳格式錯誤 (${response.status})`);
       }
 
+      if (response.status === 500) {
+          addLog(`❌ 後端設定錯誤`, false);
+          addLog(`📝 原因：${data.message}`, false);
+          if (data.message.includes('LINE_GROUP_ID')) {
+              addLog(`💡 請至 Vercel 後台設定環境變數。`, null);
+          }
+          setIsTriggering(false);
+          return;
+      }
+
+      // 狀況 C: 成功
       if (response.ok && data.success) {
         addLog(`✅ LINE 廣播成功：${data.message}`, true);
       } else {
-        addLog(`❌ 發送失敗：${data.message || data.error}`, false);
+        addLog(`❌ 發送失敗：${data.message || '未知錯誤'}`, false);
       }
     } catch (error: any) {
-      addLog(`❌ 連線錯誤：${error.message}`, false);
+      addLog(`❌ 連線異常：${error.message}`, false);
     } finally {
       setIsTriggering(false);
     }
@@ -204,10 +208,10 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
           </button>
         </div>
 
-        {/* Dashboard Layout: Left (Controls) & Right (Preview) */}
+        {/* Dashboard Layout */}
         <div className="flex-1 overflow-hidden p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
             
-            {/* Left Panel: Settings & Inputs */}
+            {/* Left Panel */}
             <div className="flex flex-col gap-6 overflow-y-auto pr-2">
                 
                 {/* 1. Date Selection */}
@@ -226,7 +230,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                 className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-800 font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
                             />
                         </div>
-                        {/* Info Box */}
                         <div className="text-[11px] text-slate-500 bg-blue-50 p-3 rounded-lg border border-blue-100 flex items-start gap-2 leading-relaxed">
                             <Info size={14} className="shrink-0 mt-0.5 text-blue-500" />
                             <p>系統已自動鎖定 <strong>2025/1/27</strong> 及 <strong>2026/2/16</strong> 為春節暫停週。若選擇此區間，下方將自動切換為暫停模式。</p>
@@ -234,7 +237,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                     </div>
                 </div>
 
-                {/* 2. Actions & Custom Reason */}
+                {/* 2. Actions */}
                 <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex-1 flex flex-col">
                      <h3 className="flex items-center gap-2 font-bold text-slate-800 mb-4 text-sm uppercase tracking-wider">
                         <Edit3 className="w-4 h-4 text-rose-500" />
@@ -291,14 +294,13 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
 
             </div>
 
-            {/* Right Panel: Preview & Logs */}
+            {/* Right Panel */}
             <div className="flex flex-col gap-6 h-full overflow-hidden">
                 
-                {/* 1. Visual Preview Card */}
+                {/* 1. Preview Card */}
                 <div className={`relative flex-1 rounded-xl border-2 flex flex-col items-center justify-center text-center p-6 transition-all duration-500 overflow-hidden group
                     ${isSkipWeek ? 'bg-rose-50/50 border-rose-200' : 'bg-white border-slate-200'}`}>
                    
-                   {/* Background pattern decoration */}
                    <div className={`absolute top-0 right-0 p-10 opacity-5 transform translate-x-1/3 -translate-y-1/3 transition-colors duration-500
                        ${isSkipWeek ? 'text-rose-900' : 'text-slate-900'}`}>
                        <UserCircle size={200} />
@@ -319,7 +321,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                             {dutyPerson}
                         </div>
 
-                        {/* 如果有自訂理由，顯示在預覽卡片上 */}
                         {(customReason && isSkipWeek) || (customReason && !dutyPerson) ? (
                              <div className="mt-3 text-sm text-rose-500 font-medium bg-white/80 px-3 py-1 rounded-lg border border-rose-100 shadow-sm">
                                 事由：{customReason}
@@ -342,21 +343,25 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                             <Terminal size={12} className="text-emerald-500" />
                             System Activity Log
                         </div>
-                        <div className="flex gap-1.5">
-                            <div className="w-2 h-2 rounded-full bg-red-500/20"></div>
-                            <div className="w-2 h-2 rounded-full bg-yellow-500/20"></div>
-                            <div className="w-2 h-2 rounded-full bg-green-500/20"></div>
+                        <div className="flex gap-2">
+                             <span className="flex items-center gap-1 text-[9px] text-slate-500">
+                                <div className={`w-1.5 h-1.5 rounded-full ${window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? 'bg-amber-500' : 'bg-emerald-500'}`}></div>
+                                {window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? 'Local Mode' : 'Connected'}
+                             </span>
                         </div>
                     </div>
                     <div className="flex-1 overflow-y-auto space-y-2 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent pr-2">
                         {logs.length === 0 && (
                             <div className="flex flex-col items-center justify-center h-full text-slate-600 italic gap-2">
-                                <Play size={16} className="opacity-20" />
+                                <Server size={16} className="opacity-20" />
                                 <span>等待指令輸入...</span>
                             </div>
                         )}
                         {logs.map((log, idx) => (
-                            <div key={idx} className={`flex gap-2 animate-in slide-in-from-left-2 duration-200 border-l-2 pl-2 ${log.success ? 'border-emerald-500/50 text-emerald-400' : 'border-rose-500/50 text-rose-400'}`}>
+                            <div key={idx} className={`flex gap-2 animate-in slide-in-from-left-2 duration-200 border-l-2 pl-2 
+                                ${log.success === true ? 'border-emerald-500/50 text-emerald-400' : 
+                                  log.success === false ? 'border-rose-500/50 text-rose-400' : 
+                                  'border-amber-500/50 text-amber-400'}`}>
                                 <span className="text-slate-600 shrink-0 select-none">[{log.time}]</span>
                                 <span className="break-all">{log.msg}</span>
                             </div>

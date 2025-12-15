@@ -51,7 +51,6 @@ function getEffectiveWeeksDiff(targetDate, anchorDate) {
 
 // 輔助函式：建立輪值 Flex Message (正常版)
 function createRosterFlex(dutyPerson, dateStr) {
-  // 簡單處理日期顯示，讓公告看起來更具體
   const dateObj = new Date(dateStr);
   const month = dateObj.getMonth() + 1;
   const day = dateObj.getDate();
@@ -69,13 +68,7 @@ function createRosterFlex(dutyPerson, dateStr) {
         backgroundColor: "#1e293b", // Slate-800
         paddingAll: "lg",
         contents: [
-          {
-            type: "text",
-            text: "📢 行政科週知",
-            color: "#ffffff",
-            weight: "bold",
-            size: "lg"
-          }
+          { type: "text", text: "📢 行政科週知", color: "#ffffff", weight: "bold", size: "lg" }
         ]
       },
       body: {
@@ -83,82 +76,24 @@ function createRosterFlex(dutyPerson, dateStr) {
         layout: "vertical",
         spacing: "md",
         contents: [
-          {
-            type: "text",
-            text: "報告同仁早安 ☀️",
-            color: "#64748b",
-            size: "sm"
-          },
-          {
-            type: "text",
-            text: "本週科務會議輪值紀錄為：",
-            color: "#334155",
-            size: "md",
-            weight: "bold"
-          },
-          {
-            type: "separator",
-            color: "#cbd5e1"
-          },
-          {
-            type: "text",
-            text: dutyPerson,
-            size: "3xl", 
-            weight: "bold",
-            color: "#ef4444", // Red-500
-            align: "center",
-            margin: "lg"
-          },
-          {
-            type: "separator",
-            color: "#cbd5e1",
-            margin: "lg"
-          },
+          { type: "text", text: "報告同仁早安 ☀️", color: "#64748b", size: "sm" },
+          { type: "text", text: "本週科務會議輪值紀錄為：", color: "#334155", size: "md", weight: "bold" },
+          { type: "separator", color: "#cbd5e1" },
+          { type: "text", text: dutyPerson, size: "3xl", weight: "bold", color: "#ef4444", align: "center", margin: "lg" },
+          { type: "separator", color: "#cbd5e1", margin: "lg" },
           {
             type: "box",
             layout: "vertical",
             margin: "lg",
             spacing: "sm",
             contents: [
-              {
-                 type: "text",
-                 text: "煩請各位於 週二下班前",
-                 color: "#334155",
-                 weight: "bold",
-                 size: "sm"
-              },
-              {
-                 type: "text",
-                 text: "完成工作日誌 📝",
-                 color: "#64748b",
-                 size: "sm",
-                 margin: "none"
-              },
-              {
-                 type: "text",
-                 text: "俾利輪值同仁於 週三",
-                 color: "#334155",
-                 weight: "bold",
-                 size: "sm",
-                 margin: "md"
-              },
-              {
-                 type: "text",
-                 text: "彙整陳核用印 🈳",
-                 color: "#64748b",
-                 size: "sm",
-                 margin: "none"
-              }
+              { type: "text", text: "煩請各位於 週二下班前", color: "#334155", weight: "bold", size: "sm" },
+              { type: "text", text: "完成工作日誌 📝", color: "#64748b", size: "sm", margin: "none" },
+              { type: "text", text: "俾利輪值同仁於 週三", color: "#334155", weight: "bold", size: "sm", margin: "md" },
+              { type: "text", text: "彙整陳核用印 🈳", color: "#64748b", size: "sm", margin: "none" }
             ]
           },
-          {
-            type: "text",
-            text: "辛苦了，祝本週工作順心！💪✨",
-            margin: "xl",
-            size: "xs",
-            color: "#94a3b8",
-            align: "center"
-          }
+          { type: "text", text: "辛苦了，祝本週工作順心！💪✨", margin: "xl", size: "xs", color: "#94a3b8", align: "center" }
         ]
       }
     }
@@ -180,13 +115,7 @@ function createSuspendFlex(reason) {
         backgroundColor: "#b91c1c", // Red-700
         paddingAll: "lg",
         contents: [
-          {
-            type: "text",
-            text: "⛔ 會議暫停公告",
-            color: "#ffffff",
-            weight: "bold",
-            size: "lg"
-          }
+          { type: "text", text: "⛔ 會議暫停公告", color: "#ffffff", weight: "bold", size: "lg" }
         ]
       },
       body: {
@@ -194,60 +123,13 @@ function createSuspendFlex(reason) {
         layout: "vertical",
         spacing: "md",
         contents: [
-          {
-            type: "text",
-            text: "報告同仁早安 ☀️",
-            color: "#64748b",
-            size: "sm"
-          },
-          {
-            type: "text",
-            text: `因適逢${displayReason}`,
-            color: "#334155",
-            size: "md",
-            weight: "bold",
-            align: "center",
-            margin: "lg",
-            wrap: true
-          },
-          {
-            type: "text",
-            text: "本週科務會議",
-            size: "xl", 
-            weight: "bold",
-            color: "#1e293b",
-            align: "center"
-          },
-          {
-            type: "text",
-            text: "【暫停辦理乙次】",
-            size: "xxl", 
-            weight: "bold",
-            color: "#ef4444", // Red-500
-            align: "center",
-            margin: "sm"
-          },
-           {
-            type: "text",
-            text: "( 本週暫停輪值，順序遞延 )",
-            size: "sm", 
-            color: "#94a3b8",
-            align: "center",
-            margin: "md"
-          },
-          {
-            type: "separator",
-            color: "#cbd5e1",
-            margin: "xl"
-          },
-          {
-            type: "text",
-            text: "祝各位假期愉快，平安順心！✨",
-            margin: "xl",
-            size: "xs",
-            color: "#94a3b8",
-            align: "center"
-          }
+          { type: "text", text: "報告同仁早安 ☀️", color: "#64748b", size: "sm" },
+          { type: "text", text: `因適逢${displayReason}`, color: "#334155", size: "md", weight: "bold", align: "center", margin: "lg", wrap: true },
+          { type: "text", text: "本週科務會議", size: "xl", weight: "bold", color: "#1e293b", align: "center" },
+          { type: "text", text: "【暫停辦理乙次】", size: "xxl", weight: "bold", color: "#ef4444", align: "center", margin: "sm" },
+           { type: "text", text: "( 本週暫停輪值，順序遞延 )", size: "sm", color: "#94a3b8", align: "center", margin: "md" },
+          { type: "separator", color: "#cbd5e1", margin: "xl" },
+          { type: "text", text: "祝各位假期愉快，平安順心！✨", margin: "xl", size: "xs", color: "#94a3b8", align: "center" }
         ]
       }
     }
@@ -256,27 +138,25 @@ function createSuspendFlex(reason) {
 
 // Vercel Cron Job Handler
 export default async function handler(req, res) {
+  // 1. 基本安全檢查
   const isManualRun = req.query.manual === 'true';
-  const actionType = req.query.type || 'weekly'; 
-  const customReason = req.query.reason || ''; // 接收自訂理由
-  const targetDateStr = req.query.date; // 接收指定日期 (YYYY-MM-DD)
-
   const authHeader = req.headers['authorization'];
   
   if (!isManualRun && process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return res.status(401).json({ success: false, message: 'Unauthorized' });
+    return res.status(401).json({ success: false, message: 'Unauthorized (Invalid Cron Secret)' });
   }
 
+  // 2. 檢查 LINE 設定
   const channelAccessToken = process.env.CHANNEL_ACCESS_TOKEN;
   const channelSecret = process.env.CHANNEL_SECRET;
   const targetGroupId = process.env.LINE_GROUP_ID;
 
   if (!channelAccessToken || !channelSecret) {
-    return res.status(500).json({ success: false, message: 'Missing Channel Token/Secret' });
+    return res.status(500).json({ success: false, message: '錯誤：未設定 CHANNEL_ACCESS_TOKEN 或 CHANNEL_SECRET' });
   }
 
   if (!targetGroupId) {
-    return res.status(500).json({ success: false, message: 'Missing LINE_GROUP_ID' });
+    return res.status(500).json({ success: false, message: '錯誤：未設定 LINE_GROUP_ID' });
   }
 
   try {
@@ -284,34 +164,35 @@ export default async function handler(req, res) {
     let flexMsg;
     let logMessage = "";
     
+    // 3. 參數解析
+    const actionType = req.query.type || 'weekly'; 
+    const customReason = req.query.reason || ''; 
+    const targetDateStr = req.query.date; 
+
     // 計算目標日期
     let baseDate = new Date();
     if (targetDateStr) {
+        // 強制解析 YYYY-MM-DD，避免時區問題
+        // 例如 2025-05-01 -> 2025-05-01T00:00:00.000Z
         baseDate = new Date(targetDateStr);
     }
     
     // 轉換為台灣時間進行計算 (若 Server 為 UTC，+8hr)
-    // 若 baseDate 來自 YYYY-MM-DD，則是 UTC 00:00，+8hr 變成當日早上 08:00，日期正確
     const taiwanNow = new Date(baseDate.getTime() + (8 * 60 * 60 * 1000));
 
     let effectiveType = actionType;
     
-    // 自動排程時檢查 Skip Week，手動觸發則依指令為主(除非強制檢查)
-    // 這裡邏輯：若手動指定 'suspend' 則直接暫停；若 'weekly' 則檢查日期
+    // 判斷是否為暫停週
     if (effectiveType === 'weekly' && isSkipWeek(taiwanNow)) {
         console.log(`Target Date ${taiwanNow.toISOString()} is a SKIP WEEK. Switching to suspend notice.`);
         effectiveType = 'suspend';
     }
 
     if (effectiveType === 'suspend') {
-        console.log('Running Suspension Announcement...');
-        // 優先使用傳入的 customReason，若無則自動判斷
         const reasonText = customReason || (isSkipWeek(taiwanNow) ? "春節連假或排定休假" : "特殊事由");
         flexMsg = createSuspendFlex(reasonText);
-        logMessage = `Suspension Notice Sent (Reason: ${reasonText})`;
+        logMessage = `暫停公告已發送 (事由: ${reasonText})`;
     } else {
-        console.log('Running Weekly Roster Announcement...');
-        
         const staffList = [
           '林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰',
           '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'
@@ -326,10 +207,22 @@ export default async function handler(req, res) {
 
         const dutyPerson = staffList[targetIndex];
         flexMsg = createRosterFlex(dutyPerson, taiwanNow.toISOString());
-        logMessage = `Weekly Roster Sent. Duty: ${dutyPerson}`;
+        logMessage = `輪值公告已發送 (本週輪值: ${dutyPerson})`;
     }
 
-    await client.pushMessage(targetGroupId, flexMsg);
+    // 4. 執行發送
+    try {
+        await client.pushMessage(targetGroupId, flexMsg);
+    } catch (lineError) {
+        console.error('LINE API Error:', lineError);
+        // 捕捉常見錯誤並回傳更友善的訊息
+        if (lineError.statusCode === 400) {
+            return res.status(500).json({ success: false, message: '發送失敗：無效的 Group ID 或參數錯誤' });
+        } else if (lineError.statusCode === 401 || lineError.statusCode === 403) {
+            return res.status(500).json({ success: false, message: '發送失敗：Token 無效或權限不足' });
+        }
+        throw lineError;
+    }
     
     return res.status(200).json({ 
         success: true, 
@@ -340,6 +233,6 @@ export default async function handler(req, res) {
 
   } catch (error) {
     console.error('Cron Job Error:', error);
-    return res.status(500).json({ success: false, error: error.message });
+    return res.status(500).json({ success: false, message: `伺服器錯誤: ${error.message}` });
   }
 }
