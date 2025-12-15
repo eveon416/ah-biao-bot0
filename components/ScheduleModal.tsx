@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, Clock, Bell, UserCircle, ArrowRight, Play, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
+import { X, Calendar, Clock, Bell, UserCircle, ArrowRight, Play, CheckCircle2, AlertTriangle, Loader2, WifiOff } from 'lucide-react';
 
 interface ScheduleModalProps {
   isOpen: boolean;
@@ -12,7 +12,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
   
   // Manual Trigger State
   const [isTriggering, setIsTriggering] = useState(false);
-  const [triggerResult, setTriggerResult] = useState<{success: boolean; message: string} | null>(null);
+  const [triggerResult, setTriggerResult] = useState<{success: boolean; message: string; type?: 'local' | 'remote'} | null>(null);
 
   // 初始化日期為今天
   useEffect(() => {
@@ -51,24 +51,61 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
   };
 
   const handleManualTrigger = async () => {
-    if (!confirm('確定要立即發送本週輪值公告至 LINE 群組嗎？\n(請確認 LINE_GROUP_ID 已正確設定)')) return;
+    // 簡單確認
+    if (!confirm('【手動執行確認】\n您確定要立即觸發「本週輪值公告」至 LINE 群組嗎？')) return;
 
     setIsTriggering(true);
     setTriggerResult(null);
 
+    // 1. 檢查是否為 Localhost (本機環境無法呼叫 Vercel Serverless Function)
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
+    if (isLocalhost) {
+      // 模擬延遲與成功回應
+      setTimeout(() => {
+        setTriggerResult({ 
+          success: true, 
+          message: `(本機模擬) 發送成功！輪值人員：${dutyPerson}`,
+          type: 'local'
+        });
+        setIsTriggering(false);
+      }, 1500);
+      return;
+    }
+
+    // 2. 正式環境呼叫
     try {
       const response = await fetch('/api/cron?manual=true', {
-        method: 'GET', // or POST depending on how it's handled, Cron is usually GET
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' }
       });
-      const data = await response.json();
+
+      // 嘗試解析 JSON，若失敗(例如回傳 404 HTML)則捕捉錯誤
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseError) {
+        throw new Error(`伺服器回應格式錯誤 (Status: ${response.status})。可能 API 路徑不存在。`);
+      }
 
       if (response.ok && data.success) {
-        setTriggerResult({ success: true, message: `發送成功！輪值人員：${data.duty}` });
+        setTriggerResult({ 
+          success: true, 
+          message: `發送成功！輪值人員：${data.duty}`,
+          type: 'remote'
+        });
       } else {
-        setTriggerResult({ success: false, message: data.message || data.error || '未知錯誤' });
+        setTriggerResult({ 
+          success: false, 
+          message: data.message || data.error || '未知的伺服器錯誤' 
+        });
       }
-    } catch (error) {
-      setTriggerResult({ success: false, message: '網路連線失敗，請檢查 API 路徑或 Server 狀態。' });
+    } catch (error: any) {
+      console.error("Trigger Error:", error);
+      setTriggerResult({ 
+        success: false, 
+        message: `連線失敗：${error.message || '請檢查網路狀態'}` 
+      });
     } finally {
       setIsTriggering(false);
     }
@@ -133,15 +170,21 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
                             }`}
                         >
                           {isTriggering ? <Loader2 className="animate-spin w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
-                          <span>{isTriggering ? '發送中...' : '⚡ 立即手動執行'}</span>
+                          <span>{isTriggering ? '連線中...' : '⚡ 立即手動執行'}</span>
                         </button>
                         
                         {/* Result Message */}
                         {triggerResult && (
-                           <div className={`mt-2 text-[10px] px-2 py-1 rounded border flex items-center gap-1.5 animate-in slide-in-from-top-1
-                             ${triggerResult.success ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
-                             {triggerResult.success ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
-                             <span>{triggerResult.message}</span>
+                           <div className={`mt-2 text-[10px] px-2 py-1.5 rounded border flex items-start gap-1.5 animate-in slide-in-from-top-1 max-w-[200px] sm:max-w-none
+                             ${triggerResult.success 
+                                ? (triggerResult.type === 'local' ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-green-50 text-green-700 border-green-200')
+                                : 'bg-red-50 text-red-700 border-red-200'}`}>
+                             
+                             {triggerResult.success 
+                                ? (triggerResult.type === 'local' ? <WifiOff size={12} className="shrink-0 mt-0.5" /> : <CheckCircle2 size={12} className="shrink-0 mt-0.5" />)
+                                : <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                             }
+                             <span className="leading-tight">{triggerResult.message}</span>
                            </div>
                         )}
                       </div>
