@@ -272,7 +272,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
          addLog(`❌ 找不到 API (404)`, false);
          if (!isLocalhost) {
               addLog(`ℹ️ 您正在 Production 環境，但 API 回傳 404。`, null);
-              addLog(`💡 請檢查 vercel.json 是否正確設定了 /api/cron 路由。`, null);
+              addLog(`💡 已修正路由設定，請重新部署 vercel.json。`, null);
          } else {
              addLog(`💡 請確認上方「正式站台網址」是否正確。`, null);
              setShowConfig(true); 
@@ -393,7 +393,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                             value={remoteUrl}
                             onChange={handleRemoteUrlChange}
                             placeholder="例：https://myapp.vercel.app (Prod 環境請留空)"
-                            className="w-full px-3 py-2 text-xs border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none bg-white placeholder-slate-400"
+                            className="w-full px-3 py-2 text-xs border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none bg-white text-slate-900 placeholder-slate-400"
                         />
                     </div>
                 )}
@@ -432,7 +432,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                     placeholder="群組名稱" 
                                     value={newGroupName}
                                     onChange={(e) => setNewGroupName(e.target.value)}
-                                    className="w-full text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-indigo-500 outline-none"
+                                    className="w-full text-xs px-2 py-1.5 bg-white text-slate-900 rounded border border-slate-300 focus:border-indigo-500 outline-none"
                                 />
                                 <div className="relative">
                                     <input 
@@ -440,7 +440,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                         placeholder="群組 ID (U/C/R...)" 
                                         value={newGroupId}
                                         onChange={(e) => setNewGroupId(e.target.value)}
-                                        className={`w-full text-xs px-2 py-1.5 rounded border outline-none font-mono
+                                        className={`w-full text-xs px-2 py-1.5 bg-white text-slate-900 rounded border outline-none font-mono
                                             ${idError ? 'border-rose-300 focus:border-rose-500 bg-rose-50' : 'border-slate-300 focus:border-indigo-500'}`}
                                     />
                                     {idError && <span className="text-[9px] text-rose-500 absolute right-2 top-2">{idError}</span>}
@@ -517,7 +517,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                     type="date" 
                                     value={previewDate}
                                     onChange={(e) => setPreviewDate(e.target.value)}
-                                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-800 text-sm focus:border-indigo-500 outline-none"
+                                    className="w-full px-3 py-2 bg-white text-slate-900 border border-slate-300 rounded-lg text-sm focus:border-indigo-500 outline-none"
                                 />
                                 {isSkipWeek && (
                                     <div className="text-[10px] text-rose-500 font-bold flex items-center gap-1 bg-rose-50 p-2 rounded">
@@ -539,7 +539,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                     value={customReason}
                                     onChange={(e) => setCustomReason(e.target.value)}
                                     placeholder="暫停事由 (選填，例: 颱風)"
-                                    className={`w-full px-3 py-2 bg-slate-50 border rounded-lg text-slate-800 text-sm outline-none
+                                    className={`w-full px-3 py-2 bg-white text-slate-900 border rounded-lg text-sm outline-none
                                         ${isSkipWeek ? 'border-rose-300' : 'border-slate-300 focus:border-rose-400'}`}
                                 />
                             </div>
@@ -586,7 +586,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                             value={generalContent}
                             onChange={(e) => setGeneralContent(e.target.value)}
                             placeholder="請輸入公告內容，例如：提醒同仁下週一以前完成..."
-                            className="w-full flex-1 min-h-[120px] p-3 border border-slate-300 rounded-lg text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20 outline-none resize-none mb-3"
+                            className="w-full flex-1 min-h-[120px] p-3 border border-slate-300 rounded-lg text-sm bg-white text-slate-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20 outline-none resize-none mb-3"
                         />
                          <button 
                             onClick={() => handleManualTrigger('general')}
