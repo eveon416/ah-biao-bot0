@@ -113,8 +113,12 @@ function createRosterFlex(dutyPerson) {
 // Vercel Cron Job Handler
 export default async function handler(req, res) {
   // 1. 安全驗證
+  // 如果是 Cron 自動執行，需檢查 Authorization Header
+  // 如果是手動觸發 (query 帶有 manual=true)，則允許通過 (方便前端測試)
+  const isManualRun = req.query.manual === 'true';
   const authHeader = req.headers['authorization'];
-  if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  
+  if (!isManualRun && process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(401).json({ success: false, message: 'Unauthorized' });
   }
 
@@ -123,9 +127,14 @@ export default async function handler(req, res) {
   const channelSecret = process.env.CHANNEL_SECRET;
   const targetGroupId = process.env.LINE_GROUP_ID;
 
-  if (!channelAccessToken || !channelSecret || !targetGroupId) {
-    console.error('Missing LINE Config or Target Group ID');
-    return res.status(500).json({ success: false, message: 'Server Config Error' });
+  if (!channelAccessToken || !channelSecret) {
+    console.error('Missing LINE Config');
+    return res.status(500).json({ success: false, message: 'Server Config Error: Missing Channel Token/Secret' });
+  }
+
+  if (!targetGroupId) {
+    console.error('Missing LINE_GROUP_ID');
+    return res.status(500).json({ success: false, message: 'Server Config Error: Missing LINE_GROUP_ID' });
   }
 
   try {
@@ -134,7 +143,7 @@ export default async function handler(req, res) {
       channelSecret,
     });
 
-    // 3. 執行每週科務會議輪值推播 (已移除每月公告邏輯)
+    // 3. 執行每週科務會議輪值推播
     console.log('Running Weekly Roster Announcement...');
     
     const staffList = [
@@ -165,7 +174,12 @@ export default async function handler(req, res) {
     await client.pushMessage(targetGroupId, flexMsg);
     
     console.log(`Weekly Flex Message sent to ${targetGroupId}. Duty: ${dutyPerson}`);
-    return res.status(200).json({ success: true, message: 'Weekly Roster Sent', duty: dutyPerson });
+    return res.status(200).json({ 
+        success: true, 
+        message: 'Weekly Roster Sent Successfully', 
+        duty: dutyPerson,
+        timestamp: taiwanNow.toISOString()
+    });
 
   } catch (error) {
     console.error('Cron Job Error:', error);

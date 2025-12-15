@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, Clock, Bell, UserCircle, ArrowRight } from 'lucide-react';
+import { X, Calendar, Clock, Bell, UserCircle, ArrowRight, Play, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
 
 interface ScheduleModalProps {
   isOpen: boolean;
@@ -9,12 +9,17 @@ interface ScheduleModalProps {
 const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
   const [previewDate, setPreviewDate] = useState<string>('');
   const [dutyPerson, setDutyPerson] = useState<string>('');
+  
+  // Manual Trigger State
+  const [isTriggering, setIsTriggering] = useState(false);
+  const [triggerResult, setTriggerResult] = useState<{success: boolean; message: string} | null>(null);
 
   // 初始化日期為今天
   useEffect(() => {
     if (isOpen) {
       const today = new Date();
       setPreviewDate(today.toISOString().split('T')[0]);
+      setTriggerResult(null); // Reset trigger result on open
     }
   }, [isOpen]);
 
@@ -31,23 +36,42 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
       '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'
     ];
     // 設定錨點：2025-12-08 (週一) -> Index 6 (陳怡妗)
-    // 為了計算方便，將錨點設為該週的第一天(週一)
     const anchorDate = new Date('2025-12-08T00:00:00+08:00'); 
     const anchorIndex = 6;
 
-    // 處理時區問題，確保以台灣時間計算
     const targetTime = targetDate.getTime();
     const anchorTime = anchorDate.getTime();
-    const oneWeekMs = 604800000; // 7 * 24 * 60 * 60 * 1000
+    const oneWeekMs = 604800000; 
 
-    // 計算週數差 (無條件捨去，確保同一週內的人員相同)
     const diffWeeks = Math.floor((targetTime - anchorTime) / oneWeekMs);
-
     let targetIndex = (anchorIndex + diffWeeks) % staffList.length;
-    // 處理負數 (若查詢過去日期)
     if (targetIndex < 0) targetIndex = targetIndex + staffList.length;
 
     setDutyPerson(staffList[targetIndex]);
+  };
+
+  const handleManualTrigger = async () => {
+    if (!confirm('確定要立即發送本週輪值公告至 LINE 群組嗎？\n(請確認 LINE_GROUP_ID 已正確設定)')) return;
+
+    setIsTriggering(true);
+    setTriggerResult(null);
+
+    try {
+      const response = await fetch('/api/cron?manual=true', {
+        method: 'GET', // or POST depending on how it's handled, Cron is usually GET
+      });
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setTriggerResult({ success: true, message: `發送成功！輪值人員：${data.duty}` });
+      } else {
+        setTriggerResult({ success: false, message: data.message || data.error || '未知錯誤' });
+      }
+    } catch (error) {
+      setTriggerResult({ success: false, message: '網路連線失敗，請檢查 API 路徑或 Server 狀態。' });
+    } finally {
+      setIsTriggering(false);
+    }
   };
 
   if (!isOpen) return null;
@@ -83,16 +107,43 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
                 {/* Weekly Task */}
                 <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm relative overflow-hidden group">
                    <div className="absolute top-0 right-0 bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-1 rounded-bl">每週執行</div>
-                   <div className="flex items-start gap-3">
-                      <div className="bg-emerald-50 p-2 rounded-full text-emerald-600">
-                        <UserCircle size={24} />
+                   <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                      <div className="flex items-start gap-3">
+                          <div className="bg-emerald-50 p-2 rounded-full text-emerald-600">
+                            <UserCircle size={24} />
+                          </div>
+                          <div>
+                            <h4 className="font-bold text-slate-800">科務會議輪值公告</h4>
+                            <p className="text-xs text-slate-500 mt-1">每週一 上午 09:00 (UTC 01:00)</p>
+                            <p className="text-xs text-slate-600 mt-2 leading-relaxed">
+                              自動計算當週輪值人員，並發送 Flex Message 卡片至 LINE 群組。
+                            </p>
+                          </div>
                       </div>
-                      <div>
-                        <h4 className="font-bold text-slate-800">科務會議輪值公告</h4>
-                        <p className="text-xs text-slate-500 mt-1">每週一 上午 09:00</p>
-                        <p className="text-xs text-slate-600 mt-2 leading-relaxed">
-                          自動計算當週輪值人員，並發送 Flex Message 卡片至 LINE 群組。
-                        </p>
+
+                      {/* Manual Trigger Button */}
+                      <div className="w-full sm:w-auto flex flex-col items-end">
+                        <button 
+                          onClick={handleManualTrigger}
+                          disabled={isTriggering}
+                          className={`flex items-center justify-center space-x-2 px-4 py-2 rounded-lg text-xs font-bold transition-all w-full sm:w-auto
+                            ${isTriggering 
+                              ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
+                              : 'bg-emerald-600 text-white hover:bg-emerald-700 shadow hover:shadow-md active:scale-95'
+                            }`}
+                        >
+                          {isTriggering ? <Loader2 className="animate-spin w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                          <span>{isTriggering ? '發送中...' : '⚡ 立即手動執行'}</span>
+                        </button>
+                        
+                        {/* Result Message */}
+                        {triggerResult && (
+                           <div className={`mt-2 text-[10px] px-2 py-1 rounded border flex items-center gap-1.5 animate-in slide-in-from-top-1
+                             ${triggerResult.success ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                             {triggerResult.success ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+                             <span>{triggerResult.message}</span>
+                           </div>
+                        )}
                       </div>
                    </div>
                 </div>
@@ -142,9 +193,9 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose }) => {
         <div className="p-4 border-t bg-white flex justify-end">
           <button 
             onClick={onClose}
-            className="px-5 py-2 bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg transition-colors text-sm font-bold shadow-sm active:scale-95"
+            className="px-5 py-2 bg-slate-700 text-white hover:bg-slate-800 rounded-lg transition-colors text-sm font-bold shadow-sm active:scale-95"
           >
-            確認，返回系統
+            關閉視窗
           </button>
         </div>
       </div>
