@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Clock, UserCircle, Terminal, MessageSquare, ArrowRight, Server, Users, Plus, Trash2, Globe, Sparkles, CheckSquare, Square, Settings, RefreshCw, AlertCircle, ShieldAlert } from 'lucide-react';
+import { X, Clock, UserCircle, Terminal, MessageSquare, ArrowRight, Server, Users, Plus, Trash2, Globe, Sparkles, CheckSquare, Square, Settings, RefreshCw, AlertCircle, ShieldAlert, Edit3 } from 'lucide-react';
 
 interface ScheduleModalProps {
   isOpen: boolean;
@@ -31,6 +31,8 @@ const PRESET_GROUPS: Group[] = [
     }
 ];
 
+const STAFF_LIST = ['林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰', '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'];
+
 const DEFAULT_REMOTE_URL = 'https://ah-biao-bot0.vercel.app';
 
 const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenerate, onRequestRefine }) => {
@@ -40,6 +42,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
   // Roster State
   const [previewDate, setPreviewDate] = useState<string>('');
   const [dutyPerson, setDutyPerson] = useState<string>('');
+  const [overridePerson, setOverridePerson] = useState<string>(''); // 手動指定的人員
   const [isSkipWeek, setIsSkipWeek] = useState(false); // 系統內建的暫停 (如春節)
   const [forceSuspend, setForceSuspend] = useState(false); // 手動強制暫停 (如颱風)
   const [customReason, setCustomReason] = useState('');
@@ -57,10 +60,8 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
   const [idError, setIdError] = useState('');
 
   // Connection State
-  // mode: 'remote' (強制連線到 Vercel), 'local' (連線到同源/api)
   const [connectionMode, setConnectionMode] = useState<'remote' | 'local'>('remote');
   const [remoteUrl, setRemoteUrl] = useState(DEFAULT_REMOTE_URL); 
-  const [showDebug, setShowDebug] = useState(false);
 
   // Manual Trigger State
   const [isTriggering, setIsTriggering] = useState(false);
@@ -77,17 +78,15 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       setPreviewDate(`${yyyy}-${mm}-${dd}`);
       setCustomReason(''); 
       setForceSuspend(false);
+      setOverridePerson('');
       
-      // Auto-detect environment preference
       const hostname = window.location.hostname;
-      // 只要不是部署在 Vercel 上，就預設使用 Remote 模式，避免本機 404
       if (hostname.includes('vercel.app')) {
           setConnectionMode('local');
       } else {
           setConnectionMode('remote');
       }
 
-      // Load saved groups
       const saved = localStorage.getItem('line_groups_v1');
       if (saved) {
         try { setSavedGroups(JSON.parse(saved)); } catch (e) {}
@@ -113,22 +112,19 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
      const systemSkip = SKIP_WEEKS.includes(mStr);
      setIsSkipWeek(systemSkip);
 
-     // 計算邏輯：系統內建暫停 OR 使用者強制暫停
      if (systemSkip) {
          setDutyPerson('暫停 (系統預設)');
-         // 如果是系統預設暫停，強制勾選狀態不需要開啟，避免邏輯混亂，但可以讓使用者知道
      } else if (forceSuspend) {
          setDutyPerson('暫停 (手動強制)');
      } else {
-         const staffList = ['林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰', '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'];
          const anchorDate = new Date('2025-12-08T00:00:00+08:00'); 
          const anchorIndex = 6;
          const oneWeekMs = 604800000;
          const rawDiffTime = dateObj.getTime() - anchorDate.getTime();
          const rawWeeks = Math.floor(rawDiffTime / oneWeekMs);
-         let targetIndex = (anchorIndex + rawWeeks) % staffList.length;
-         if (targetIndex < 0) targetIndex = targetIndex + staffList.length;
-         setDutyPerson(`${staffList[targetIndex]} (預估)`);
+         let targetIndex = (anchorIndex + rawWeeks) % STAFF_LIST.length;
+         if (targetIndex < 0) targetIndex = targetIndex + STAFF_LIST.length;
+         setDutyPerson(`${STAFF_LIST[targetIndex]} (系統預估)`);
      }
   }, [previewDate, forceSuspend]);
 
@@ -190,8 +186,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       setLogs([]); 
       addLog('🚀 開始執行手動廣播排程...');
       
-      // 判定是否為暫停週：系統內建暫停 OR 手動強制暫停
-      const isEffectiveSuspend = isSkipWeek || forceSuspend;
+      const isEffectiveSuspend = isSkipWeek || (forceSuspend && !overridePerson);
       const isManualSuspendMode = activeTab === 'roster' && isEffectiveSuspend;
       
       let type = 'weekly';
@@ -207,19 +202,20 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
           return;
       }
 
-      // 決定 API Base URL
       let baseUrl = '';
       if (connectionMode === 'remote') {
-          baseUrl = remoteUrl.replace(/\/$/, ''); // 確保無結尾斜線
+          baseUrl = remoteUrl.replace(/\/$/, ''); 
       }
-      // 若 connectionMode 為 local，baseUrl 為空字串，代表相對路徑
 
       const apiPath = '/api/cron'; 
       const targetUrl = `${baseUrl}${apiPath}`;
       
       addLog(`正在連線至: ${connectionMode === 'remote' ? baseUrl : '[同源本地]'}`);
       addLog(`目標路徑: ${apiPath}`);
-      addLog(`執行模式: ${type} ${forceSuspend ? '(強制暫停)' : ''}`);
+      addLog(`執行模式: ${type}`);
+      if (type === 'weekly' && overridePerson) {
+          addLog(`📝 指定人員: ${overridePerson} (Override)`);
+      }
 
       const params = new URLSearchParams();
       params.append('manual', 'true');
@@ -228,6 +224,10 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       params.append('reason', customReason);
       params.append('content', generalContent);
       params.append('groupId', selectedGroupIds.join(','));
+      
+      if (type === 'weekly' && overridePerson) {
+          params.append('person', overridePerson);
+      }
 
       const fullUrl = `${targetUrl}?${params.toString()}`;
 
@@ -254,7 +254,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
               }
               
               let infoText = "";
-              if (type === 'weekly') infoText = dutyPerson;
+              if (type === 'weekly') infoText = overridePerson || dutyPerson;
               else if (type === 'suspend') infoText = customReason || "特殊事由";
               else infoText = generalContent;
               
@@ -435,16 +435,50 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                             系統推算輪值人員
                                         </span>
                                         {isSkipWeek && <span className="text-[10px] bg-red-200 text-red-800 px-1.5 py-0.5 rounded font-bold">系統內建暫停</span>}
+                                        {overridePerson && <span className="text-[10px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded font-bold">手動指定</span>}
                                     </div>
-                                    <div className={`font-bold text-lg ${forceSuspend || isSkipWeek ? 'text-red-600' : 'text-slate-800'}`}>
-                                        {dutyPerson}
+                                    <div className={`font-bold text-lg ${forceSuspend || isSkipWeek ? (overridePerson ? 'text-indigo-700' : 'text-red-600') : 'text-slate-800'}`}>
+                                        {overridePerson ? overridePerson : dutyPerson}
+                                    </div>
+                                    
+                                    {/* 人員指定下拉選單 */}
+                                    <div className="mt-3 pt-3 border-t border-dashed border-slate-200">
+                                         <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 mb-1">
+                                             <Edit3 size={10} /> 
+                                             指定輪值人員 (Override)
+                                         </label>
+                                         <select 
+                                             value={overridePerson}
+                                             onChange={e => {
+                                                 setOverridePerson(e.target.value);
+                                                 if(e.target.value) setForceSuspend(false); // 選了人就取消暫停
+                                             }}
+                                             className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded bg-white text-slate-700 outline-none focus:border-indigo-500"
+                                         >
+                                             <option value="">-- 使用系統自動推算 (Default) --</option>
+                                             {STAFF_LIST.map(p => (
+                                                 <option key={p} value={p}>{p}</option>
+                                             ))}
+                                         </select>
+                                         <p className="text-[10px] text-slate-400 mt-1">
+                                             * 若選擇指定人員，將強制發送該員卡片，忽略系統暫停或推算結果。
+                                         </p>
                                     </div>
                                 </div>
                                 
-                                {/* 突發暫停開關 */}
-                                <div className="flex items-center gap-2 p-2 rounded-lg bg-orange-50 border border-orange-100 cursor-pointer" onClick={() => !isSkipWeek && setForceSuspend(!forceSuspend)}>
-                                    <div className={`w-4 h-4 rounded border flex items-center justify-center bg-white ${forceSuspend ? 'border-orange-500' : 'border-slate-300'}`}>
-                                         {forceSuspend && <div className="w-2.5 h-2.5 bg-orange-500 rounded-sm"></div>}
+                                {/* 突發暫停開關 (若已指定人員，則隱藏或禁用) */}
+                                <div 
+                                    className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-all
+                                    ${overridePerson 
+                                        ? 'bg-slate-50 border-slate-100 opacity-50 cursor-not-allowed' 
+                                        : 'bg-orange-50 border-orange-100 hover:bg-orange-100'}`} 
+                                    onClick={() => {
+                                        if (overridePerson) return;
+                                        if (!isSkipWeek) setForceSuspend(!forceSuspend);
+                                    }}
+                                >
+                                    <div className={`w-4 h-4 rounded border flex items-center justify-center bg-white ${forceSuspend && !overridePerson ? 'border-orange-500' : 'border-slate-300'}`}>
+                                         {forceSuspend && !overridePerson && <div className="w-2.5 h-2.5 bg-orange-500 rounded-sm"></div>}
                                     </div>
                                     <div className="flex-1">
                                         <div className="text-xs font-bold text-orange-800 flex items-center gap-1">
@@ -452,21 +486,21 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                             突發狀況 (強制暫停)
                                         </div>
                                         <div className="text-[10px] text-orange-600 opacity-80">
-                                            如遇颱風、天災，請勾選此項並填寫下方原因。
+                                            {overridePerson ? '已手動指定人員，無法暫停。' : '如遇颱風、天災，請勾選此項。'}
                                         </div>
                                     </div>
                                 </div>
 
                                 <div className="flex flex-col gap-1">
                                     <label className="text-xs font-bold text-slate-500">
-                                        {(isSkipWeek || forceSuspend) ? '暫停原因 (必填)' : '特殊備註 (選填)'}
+                                        {(isSkipWeek || (forceSuspend && !overridePerson)) ? '暫停原因 (必填)' : '特殊備註 (選填)'}
                                     </label>
                                     <input 
                                         type="text" 
-                                        placeholder={(isSkipWeek || forceSuspend) ? "請輸入原因 (例：凱米颱風停班停課)..." : "例：如遇颱風順延..."} 
+                                        placeholder={(isSkipWeek || (forceSuspend && !overridePerson)) ? "請輸入原因 (例：凱米颱風停班停課)..." : "例：如遇颱風順延..."} 
                                         value={customReason} 
                                         onChange={e => setCustomReason(e.target.value)} 
-                                        className={`w-full px-3 py-2 text-sm border rounded bg-white text-slate-900 ${(isSkipWeek || forceSuspend) && !customReason ? 'border-red-300 focus:border-red-500' : ''}`}
+                                        className={`w-full px-3 py-2 text-sm border rounded bg-white text-slate-900 ${(isSkipWeek || (forceSuspend && !overridePerson)) && !customReason ? 'border-red-300 focus:border-red-500' : ''}`}
                                     />
                                 </div>
                             </div>

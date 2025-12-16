@@ -1,4 +1,5 @@
 
+
 import { Client } from "@line/bot-sdk";
 
 // === 全域設定：需跳過輪值的週次 (以該週「週一」日期為準) ===
@@ -75,7 +76,7 @@ function createRosterFlex(dutyPerson, dateStr) {
         spacing: "md",
         contents: [
           { type: "text", text: "報告同仁早安 ☀️", color: "#64748b", size: "sm" },
-          { type: "text", text: "本週科務會議輪值紀錄為：", color: "#334155", size: "md", weight: "bold" },
+          { type: "text", text: "本週科務會議輪值人員：", color: "#334155", size: "md", weight: "bold" },
           { type: "separator", color: "#cbd5e1" },
           { type: "text", text: dutyPerson, size: "3xl", weight: "bold", color: "#ef4444", align: "center", margin: "lg" },
           { type: "separator", color: "#cbd5e1", margin: "lg" },
@@ -113,7 +114,7 @@ function createSuspendText(reason) {
 
 // Vercel Cron Job Handler
 export default async function handler(req, res) {
-  // [System] Force Rebuild Tag: v2025-Standard-Routing
+  // [System] Force Rebuild Tag: v2025-Manual-Override
   console.log(`[API] Cron Handler invoked at ${new Date().toISOString()}`);
 
   // CORS Headers
@@ -168,6 +169,7 @@ export default async function handler(req, res) {
     const customReason = req.query.reason || ''; 
     const customContent = req.query.content || ''; 
     const targetDateStr = req.query.date; 
+    const overridePerson = req.query.person; // 新增：指定人員
 
     // 計算目標日期
     let baseDate = new Date();
@@ -200,15 +202,23 @@ export default async function handler(req, res) {
 
     } else {
         // === 輪值公告 (Flex Message) ===
-        if (isSkipWeek(taiwanNow)) {
+        
+        // 優先檢查是否指定了人員 (Override)
+        if (overridePerson) {
+             messagePayload = createRosterFlex(overridePerson, taiwanNow.toISOString());
+             contentDesc = `輪值公告 (手動指定: ${overridePerson})`;
+        } 
+        // 其次檢查是否為系統內建暫停週
+        else if (isSkipWeek(taiwanNow)) {
             const reasonText = customReason || "春節連假或排定休假";
              messagePayload = {
                 type: 'text',
                 text: createSuspendText(reasonText)
             };
             contentDesc = `暫停公告 (自動轉暫停, 事由: ${reasonText})`;
-        } else {
-            // 正常輪值
+        } 
+        // 最後進行自動計算
+        else {
             const staffList = [
               '林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰',
               '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'
