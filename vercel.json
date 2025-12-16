@@ -1,6 +1,13 @@
 {
-  "cleanUrls": true,
   "rewrites": [
+    {
+      "source": "/api/cron",
+      "destination": "/api/cron.js"
+    },
+    {
+      "source": "/api/webhook",
+      "destination": "/api/webhook.js"
+    },
     {
       "source": "/((?!api/|_next/|static/|.*\\..*).*)",
       "destination": "/index.html"
