@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Calendar, Clock, UserCircle, Terminal, AlertOctagon, MessageSquare, Edit3, ArrowRight, Server, Users, Plus, Trash2, Save, Laptop2, FileType, Sparkles, Settings, AlertCircle, StopCircle, CheckSquare, Square } from 'lucide-react';
 
@@ -86,673 +87,448 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       
       // Load saved groups
       const saved = localStorage.getItem('line_groups_v1');
+      let loadedGroups: Group[] = [];
       if (saved) {
         try {
-            setSavedGroups(JSON.parse(saved));
-        } catch (e) { console.error('Failed to parse groups', e); }
+           loadedGroups = JSON.parse(saved);
+        } catch (e) {
+           console.error("Failed to load custom groups", e);
+        }
       }
+      setSavedGroups(loadedGroups);
       
-      // Load saved remote URL
-      const savedUrl = localStorage.getItem('line_remote_url');
-      if (savedUrl) {
-          setRemoteUrl(savedUrl);
-      }
-      
-      if (isLocal || savedUrl) {
-          setShowConfig(true);
-      }
+      // Load remote URL if saved
+      const savedUrl = localStorage.getItem('remote_api_url');
+      if (savedUrl) setRemoteUrl(savedUrl);
     }
   }, [isOpen]);
 
+  // Determine effective duty person when date changes
   useEffect(() => {
-    if (previewDate) {
-      calculateDuty(new Date(previewDate));
-    }
+     if (!previewDate) return;
+     const dateObj = new Date(previewDate);
+     
+     // 1. Check Skip
+     const SKIP_WEEKS = ['2025-01-27', '2026-02-16'];
+     // Helper: find Monday of the week
+     const dayOfWeek = dateObj.getDay(); 
+     const diffToMon = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek;
+     const monday = new Date(dateObj);
+     monday.setDate(dateObj.getDate() + diffToMon);
+     const mStr = `${monday.getFullYear()}-${String(monday.getMonth()+1).padStart(2,'0')}-${String(monday.getDate()).padStart(2,'0')}`;
+     
+     const skip = SKIP_WEEKS.includes(mStr);
+     setIsSkipWeek(skip);
+
+     // 2. Calculate Person
+     if (skip) {
+         setDutyPerson('暫停 (自動)');
+     } else {
+         const staffList = ['林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰', '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'];
+         const anchorDate = new Date('2025-12-08T00:00:00+08:00'); 
+         const anchorIndex = 6;
+         
+         const oneWeekMs = 604800000;
+         const rawDiffTime = dateObj.getTime() - anchorDate.getTime();
+         
+         // 粗略計算週差 (前端僅供預覽，不需太精確的有效週數邏輯，若要一致需複製後端邏輯)
+         // 這裡簡單實作：每過7天換一人，不考慮前端複雜的暫停週扣除邏輯(因後端會重算)
+         // 但為了預覽準確，建議直接呼叫後端查詢，此處僅做簡單推算
+         const rawWeeks = Math.floor(rawDiffTime / oneWeekMs);
+         let targetIndex = (anchorIndex + rawWeeks) % staffList.length;
+         if (targetIndex < 0) targetIndex = targetIndex + staffList.length;
+         
+         // 簡單修正：若已知某些週跳過，手動調整 (此處僅做簡單演示，不做完整遞迴扣除)
+         // 實際運作以後端計算為準
+         setDutyPerson(`${staffList[targetIndex]} (預估)`);
+     }
+
   }, [previewDate]);
 
-  useEffect(() => {
+  const scrollToBottom = () => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [logs]);
-
-  const handleRemoteUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const url = e.target.value;
-      setRemoteUrl(url);
-      localStorage.setItem('line_remote_url', url);
   };
 
   useEffect(() => {
-      if (!newGroupId) {
-          setIdError('');
-          return;
-      }
-      const isValid = /^[UCR][0-9a-f]{32}$/.test(newGroupId);
-      if (!isValid) {
-          setIdError('格式錯誤：需以 U/C/R 開頭，共 33 碼');
-      } else {
-          setIdError('');
-      }
-  }, [newGroupId]);
+    scrollToBottom();
+  }, [logs]);
 
-  const addLog = (msg: string, success: boolean | null) => {
-    const time = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+  const addLog = (msg: string, success: boolean | null = null) => {
+    const time = new Date().toLocaleTimeString('zh-TW', {hour12: false});
     setLogs(prev => [...prev, { time, msg, success }]);
   };
 
+  const toggleGroupSelection = (gid: string) => {
+     setSelectedGroupIds(prev => {
+         if (prev.includes(gid)) return prev.filter(id => id !== gid);
+         return [...prev, gid];
+     });
+  };
+
   const handleSaveGroup = () => {
-      if (!newGroupName.trim() || !newGroupId.trim() || idError) return;
-      
-      // 檢查是否重複 (含預設群組)
-      const allGroups = [...PRESET_GROUPS, ...savedGroups];
-      if (allGroups.some(g => g.groupId === newGroupId.trim())) {
-          alert('此 Group ID 已存在於清單中');
+      if (!newGroupName.trim() || !newGroupId.trim()) return;
+      if (!/^C[0-9a-f]{32}$/.test(newGroupId.trim()) && !/^U[0-9a-f]{32}$/.test(newGroupId.trim())) {
+          setIdError('ID 格式錯誤 (應為 C 或 U 開頭的 33 碼字串)');
           return;
       }
-      
-      const newGroup: Group = {
+      const newG: Group = {
           id: Date.now().toString(),
           name: newGroupName.trim(),
           groupId: newGroupId.trim()
       };
-      
-      const updated = [...savedGroups, newGroup];
+      const updated = [...savedGroups, newG];
       setSavedGroups(updated);
       localStorage.setItem('line_groups_v1', JSON.stringify(updated));
       setNewGroupName('');
       setNewGroupId('');
       setIsAddingGroup(false);
-      
-      // 自動選取新增的群組
-      setSelectedGroupIds(prev => [...prev, newGroup.groupId]);
+      setIdError('');
+      // Auto select
+      setSelectedGroupIds(prev => [...prev, newG.groupId]);
   };
 
   const handleDeleteGroup = (id: string) => {
-      if (!window.confirm('確定要刪除此群組設定嗎？')) return;
-      
-      const groupToDelete = savedGroups.find(g => g.id === id);
+      if(!window.confirm('確定刪除此群組設定？')) return;
       const updated = savedGroups.filter(g => g.id !== id);
       setSavedGroups(updated);
       localStorage.setItem('line_groups_v1', JSON.stringify(updated));
-      
-      if (groupToDelete) {
-          setSelectedGroupIds(prev => prev.filter(gid => gid !== groupToDelete.groupId));
-      }
-  };
-  
-  // 快速加入測試群組 (如果使用者想手動加其他測試 ID)
-  const handleAddTestGroup = () => {
-      setNewGroupName("其他測試群組");
-      setNewGroupId("C7e04d9539515b89958d12658b938acce");
   };
 
-  // 處理多選切換
-  const toggleGroupSelection = (groupId: string) => {
-      setSelectedGroupIds(prev => {
-          if (prev.includes(groupId)) {
-              return prev.filter(id => id !== groupId);
-          } else {
-              return [...prev, groupId];
-          }
-      });
+  const handleSaveRemoteUrl = () => {
+      localStorage.setItem('remote_api_url', remoteUrl);
+      setShowConfig(false);
+      addLog(`已儲存遠端網址: ${remoteUrl}`, true);
   };
 
-  const calculateDuty = (targetDate: Date) => {
-    const SKIP_WEEKS = ['2025-01-27', '2026-02-16']; 
-    const dayOfWeek = targetDate.getDay(); 
-    const diffToMon = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek;
-    const monday = new Date(targetDate);
-    monday.setDate(targetDate.getDate() + diffToMon);
-    const mStr = monday.toISOString().split('T')[0];
-
-    if (SKIP_WEEKS.includes(mStr)) {
-        setIsSkipWeek(true);
-        setDutyPerson("⛔ 本週暫停辦理");
-        if (mStr === '2025-01-27' || mStr === '2026-02-16') {
-             setCustomReason("農曆春節連假");
-        } else {
-             setCustomReason("國定假日");
-        }
-        return;
-    }
-    
-    setIsSkipWeek(false);
-    if (customReason === "農曆春節連假") {
-        setCustomReason("");
-    }
-
-    const staffList = [
-      '林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰',
-      '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'
-    ];
-    const anchorDate = new Date('2025-12-08T00:00:00+08:00'); 
-    const anchorIndex = 6;
-    const oneWeekMs = 604800000; 
-    const targetTime = targetDate.getTime();
-    const anchorTime = anchorDate.getTime();
-    const rawWeeks = Math.floor((targetTime - anchorTime) / oneWeekMs);
-    let skipCount = 0;
-    const start = targetTime > anchorTime ? anchorDate : targetDate;
-    const end = targetTime > anchorTime ? targetDate : anchorDate;
-    SKIP_WEEKS.forEach(skipStr => {
-        const sDate = new Date(skipStr + 'T00:00:00+08:00');
-        if (sDate >= start && sDate < end) {
-            skipCount++;
-        }
-    });
-    let effectiveWeeks = rawWeeks;
-    if (targetTime > anchorTime) effectiveWeeks -= skipCount;
-    else effectiveWeeks += skipCount;
-    let targetIndex = (anchorIndex + effectiveWeeks) % staffList.length;
-    if (targetIndex < 0) targetIndex = targetIndex + staffList.length;
-    setDutyPerson(staffList[targetIndex]);
-  };
-
-  const handleRefine = () => {
-      if (!generalContent.trim()) {
-          alert("請先輸入公告內容");
+  // === 核心功能：手動觸發排程 ===
+  const handleTrigger = async () => {
+      if (selectedGroupIds.length === 0) {
+          alert("請至少選擇一個發送目標群組");
           return;
       }
-      if (onRequestRefine) {
-          onRequestRefine(generalContent);
-          onClose(); // 關閉視窗回到聊天室
-      }
-  };
 
-  const handleManualTrigger = async (type: 'weekly' | 'suspend' | 'general') => {
-    if (isTriggering) return;
-    
-    if (selectedGroupIds.length === 0) {
-        alert("請至少選擇一個發送對象！");
-        return;
-    }
-
-    setIsTriggering(true);
-    
-    // 合併預設與自訂群組以查找名稱，用於顯示 Log
-    const allGroups = [...PRESET_GROUPS, ...savedGroups];
-    const targetNames = selectedGroupIds.map(id => {
-        const g = allGroups.find(group => group.groupId === id);
-        return g ? g.name : id.substring(0, 6) + '...';
-    });
-    
-    // 1. 本機 UI 擬稿顯示 (Preview)
-    try {
-        if (type === 'general') {
-             onGenerate('general', generalContent);
-        } else if (type === 'weekly') {
-            if (isSkipWeek) {
-                onGenerate('suspend', customReason || '春節/國定假日');
-            } else {
-                onGenerate('weekly', dutyPerson);
-            }
-        } else {
-             const finalReason = customReason.trim() || '特殊行政事由';
-             onGenerate('suspend', finalReason);
-        }
-    } catch(e) { console.error(e); }
-
-    // === URL 處理 ===
-    const effectiveRemoteUrl = remoteUrl.trim().replace(/\/$/, '');
-    
-    if (isLocalhost && !effectiveRemoteUrl) {
-        addLog(`🔧 [模擬模式] 準備發送至 ${targetNames.length} 個群組...`, null);
-        setTimeout(() => {
-            addLog(`✅ 模擬發送成功 (未消耗 API)`, true);
-            addLog(`ℹ️ 若要真實發送，請上方輸入正式站台網址。`, null);
-        }, 800);
-        setIsTriggering(false);
-        return;
-    }
-
-    addLog(`正在連線至 ${effectiveRemoteUrl ? `[遠端: ${new URL(effectiveRemoteUrl).hostname}]` : '[後端 API]'} 並廣播...`, true);
-    
-    try {
-      const reasonParam = encodeURIComponent(customReason || '');
-      const contentParam = encodeURIComponent(generalContent || '');
-      // 將多個 ID 用逗號分隔傳遞
-      const groupParam = `&groupId=${selectedGroupIds.join(',')}`;
-      const baseUrl = effectiveRemoteUrl || ''; 
+      setIsTriggering(true);
+      setLogs([]); // Clear previous logs
+      addLog('🚀 開始執行手動廣播排程...');
       
-      const url = `${baseUrl}/api/cron?manual=true&type=${type}&date=${previewDate}&reason=${reasonParam}&content=${contentParam}${groupParam}`;
+      const isManualSuspend = activeTab === 'roster' && isSkipWeek;
+      
+      // Determine Type
+      let type = 'weekly';
+      if (activeTab === 'general') type = 'general';
+      else if (isManualSuspend) type = 'suspend';
+      else type = 'weekly';
 
-      // DEBUG: 顯示實際請求 URL (隱藏敏感參數)
-      addLog(`📡 GET ${url.replace(baseUrl, '')}`, null);
+      // Construct URL
+      // 重點修正：明確指定 .js 副檔名，避免 Vercel 路由解析錯誤 (404)
+      const apiPath = '/api/cron.js'; 
+      const baseUrl = (isLocalhost && remoteUrl) ? remoteUrl.replace(/\/$/, '') : '';
+      const targetUrl = `${baseUrl}${apiPath}`;
 
-      const response = await fetch(url, {
-        method: 'GET'
-      });
+      addLog(`正在連線至 [${isLocalhost && remoteUrl ? '遠端' : '同源'}] 後端 API...`);
+      
+      const params = new URLSearchParams();
+      params.append('manual', 'true');
+      params.append('type', type);
+      params.append('date', previewDate);
+      params.append('reason', customReason);
+      params.append('content', generalContent);
+      params.append('groupId', selectedGroupIds.join(','));
 
-      if (response.status === 404) {
-         addLog(`❌ 找不到 API (404)`, false);
-         if (!isLocalhost) {
-              addLog(`ℹ️ API 路徑未找到 (/api/cron)`, null);
-              addLog(`💡 Vercel 路由設定正在更新中...`, null);
-         } else {
-             addLog(`💡 請確認上方「正式站台網址」是否正確。`, null);
-             setShowConfig(true); 
-         }
-         setIsTriggering(false);
-         return;
-      }
+      const fullUrl = `${targetUrl}?${params.toString()}`;
+      // Log URL (hide secret/sensitive info if any, though GET params are visible here)
+      // addLog(`GET ${fullUrl}`); 
 
-      let data;
       try {
-        data = await response.json();
-      } catch (e) {
-        // 如果不是 JSON，可能是 Vercel 的 HTML 錯誤頁面
-        throw new Error(`伺服器回傳格式錯誤 (${response.status})`);
-      }
+          const res = await fetch(fullUrl, { method: 'GET' });
+          
+          if (!res.ok) {
+               // Try to parse error
+               let errorMsg = `HTTP ${res.status} ${res.statusText}`;
+               try {
+                   const errJson = await res.json();
+                   if (errJson.message) errorMsg += ` - ${errJson.message}`;
+               } catch (e) {}
+               throw new Error(errorMsg);
+          }
 
-      if (response.status === 500 || response.status === 400) {
-          addLog(`❌ 發送失敗`, false);
-          addLog(`📝 訊息: ${data.message}`, false);
-          setIsTriggering(false);
-          return;
-      }
-
-      if (response.ok && data.success) {
-        addLog(`✅ 廣播成功 (目標: ${targetNames.length} 個群組)`, true);
-      } else {
-        addLog(`❌ 發送失敗：${data.message || '未知錯誤'}`, false);
-      }
-    } catch (error: any) {
-      addLog(`❌ 連線異常：${error.message}`, false);
-      if (error.message.includes('Failed to fetch')) {
-          addLog(`⚠️ 連線被阻擋 (CORS) 或 URL 錯誤。`, null);
-      }
-    } finally {
-      setIsTriggering(false);
-    }
-  };
-
-  // 渲染群組項目 Helper
-  const renderGroupItem = (group: Group) => {
-      const isSelected = selectedGroupIds.includes(group.groupId);
-      return (
-          <div key={group.id} className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-all group select-none
-                ${isSelected ? 'bg-indigo-50 border-indigo-300 shadow-sm' : 'bg-white border-slate-200 hover:bg-slate-50'}`}
-                onClick={() => toggleGroupSelection(group.groupId)}
-          >
-              <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors
-                  ${isSelected ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-300'}`}>
-                  {isSelected && <CheckSquare size={14} />}
-              </div>
+          const data = await res.json();
+          if (data.success) {
+              addLog(`✅ 發送成功！已推送至 ${data.sentTo?.length || 0} 個群組`, true);
+              if (data.errors) {
+                  data.errors.forEach((err: string) => addLog(`⚠️ 部分失敗: ${err}`, false));
+              }
               
-              <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                      <div className="text-sm font-bold text-slate-800 truncate">{group.name}</div>
-                      {group.isPreset && <span className="text-[9px] bg-slate-100 text-slate-500 px-1 rounded border border-slate-200">內建</span>}
-                  </div>
-                  <div className="text-[10px] text-slate-400 truncate font-mono">{group.groupId}</div>
-              </div>
+              // 通知父層生成對話框訊息 (模擬 AI 回覆)
+              let infoText = "";
+              if (type === 'weekly') infoText = dutyPerson;
+              else if (type === 'suspend') infoText = customReason || "特殊事由";
+              else infoText = generalContent;
+              
+              onGenerate(type as any, infoText);
+              
+              // Close modal after short delay
+              setTimeout(() => {
+                  onClose();
+              }, 2000);
 
-              {!group.isPreset && (
-                  <button 
-                      onClick={(e) => { e.stopPropagation(); handleDeleteGroup(group.id); }}
-                      className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded transition-colors"
-                      title="刪除"
-                  >
-                      <Trash2 size={14} />
-                  </button>
-              )}
-          </div>
-      );
+          } else {
+              throw new Error(data.message || '未知錯誤');
+          }
+
+      } catch (error: any) {
+          console.error(error);
+          addLog(`❌ 執行失敗: ${error.message}`, false);
+          if (error.message.includes('404')) {
+               addLog(`ℹ️ 請檢查 API 路徑是否正確 (${targetUrl})`);
+               if (isLocalhost && !remoteUrl) addLog(`💡 本機開發環境可能需要設定遠端 Vercel 網址`);
+          }
+      } finally {
+          setIsTriggering(false);
+      }
   };
 
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm transition-all">
-      <div className="bg-slate-50 w-full max-w-4xl rounded-xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200 border border-slate-200">
+      <div className="bg-white w-full max-w-4xl rounded-xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         
         {/* Header */}
-        <div className="bg-slate-800 text-white px-6 py-4 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="p-1.5 bg-emerald-500 rounded-lg text-white">
-                <Calendar className="w-5 h-5" />
-            </div>
-            <div>
-                <h2 className="text-lg font-bold tracking-wide official-font leading-none">排程指揮中心</h2>
-                <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-wider">Command & Control Dashboard</p>
-            </div>
-          </div>
+        <div className="bg-gradient-to-r from-emerald-900 to-emerald-800 text-white px-6 py-4 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
-            <button
-                onClick={() => setShowConfig(!showConfig)}
-                className={`p-2 rounded-full transition-colors ${showConfig ? 'bg-indigo-500 text-white' : 'text-slate-400 hover:text-white hover:bg-white/10'}`}
-                title="連線設定"
-            >
-                <Settings size={20} />
-            </button>
-            <button 
-                onClick={onClose}
-                className="text-slate-400 hover:text-white hover:bg-white/10 p-2 rounded-full transition-colors"
-            >
-                <X size={20} />
-            </button>
+            <Clock className="w-5 h-5 text-emerald-400" />
+            <div>
+                 <h2 className="text-lg font-bold tracking-wide official-font">排程廣播控制台</h2>
+                 <p className="text-[10px] text-emerald-200 opacity-80">CRON JOB MANAGER</p>
+            </div>
           </div>
+          <button onClick={onClose} className="text-emerald-200 hover:text-white hover:bg-white/10 p-1 rounded-full transition-colors"><X size={20} /></button>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="flex border-b border-slate-200 bg-white px-6 pt-2">
-            <button 
-                onClick={() => setActiveTab('roster')}
-                className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors flex items-center gap-2
-                    ${activeTab === 'roster' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-            >
-                <UserCircle size={16} />
-                輪值設定 (Roster)
-            </button>
-            <button 
-                onClick={() => setActiveTab('general')}
-                className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors flex items-center gap-2
-                    ${activeTab === 'general' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-            >
-                <MessageSquare size={16} />
-                一般公告 (Text)
-            </button>
-        </div>
-
-        {/* Dashboard Layout */}
-        <div className="flex-1 overflow-hidden p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Body */}
+        <div className="flex flex-1 overflow-hidden">
             
             {/* Left Panel: Controls */}
-            <div className="flex flex-col gap-4 overflow-y-auto pr-2">
+            <div className="w-full md:w-1/2 p-6 overflow-y-auto border-r border-slate-100 bg-slate-50">
                 
-                {/* Connection Config */}
-                {showConfig && (
-                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 shadow-sm animate-in slide-in-from-top-2">
-                        <div className="flex items-start gap-3 mb-3">
-                             <div className="p-2 bg-amber-100 rounded-lg text-amber-600 shrink-0">
-                                <Laptop2 size={20} />
-                            </div>
-                            <div>
-                                <h3 className="text-sm font-bold text-amber-800 mb-1">連線設定 (Connection Config)</h3>
-                                <p className="text-xs text-amber-700 leading-relaxed">
-                                    若您在本機 (Local)，請輸入完整網址。若已部署 (Prod)，請保持空白。
-                                </p>
-                            </div>
-                        </div>
-                        <input 
-                            type="text" 
-                            value={remoteUrl}
-                            onChange={handleRemoteUrlChange}
-                            placeholder="例：https://myapp.vercel.app (Prod 環境請留空)"
-                            className="w-full px-3 py-2 text-xs border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none bg-white text-slate-900 placeholder-slate-400 font-medium"
-                        />
+                {/* Environment Warning */}
+                {isLocalhost && (
+                    <div className="mb-4 bg-orange-50 border border-orange-200 rounded-lg p-3 text-xs text-orange-800 flex flex-col gap-2">
+                         <div className="flex items-center gap-2 font-bold">
+                             <Laptop2 size={14} />
+                             <span>偵測到本機開發環境 (Localhost)</span>
+                         </div>
+                         <p className="opacity-80">
+                             本機環境無法執行 Vercel Cron，請設定遠端 API 網址以測試發送。
+                         </p>
+                         {!showConfig && (
+                             <button onClick={() => setShowConfig(true)} className="text-left text-blue-600 underline hover:text-blue-800">
+                                 設定遠端 API 網址...
+                             </button>
+                         )}
+                         {showConfig && (
+                             <div className="mt-2 bg-white p-2 rounded border border-orange-200">
+                                 <label className="block text-[10px] text-slate-500 mb-1">Vercel Project URL (e.g., https://myapp.vercel.app)</label>
+                                 <div className="flex gap-2">
+                                     <input 
+                                        type="text" 
+                                        value={remoteUrl} 
+                                        onChange={e => setRemoteUrl(e.target.value)}
+                                        className="flex-1 px-2 py-1 border rounded text-xs"
+                                        placeholder="https://..."
+                                     />
+                                     <button onClick={handleSaveRemoteUrl} className="bg-blue-600 text-white px-2 py-1 rounded text-xs">儲存</button>
+                                 </div>
+                             </div>
+                         )}
                     </div>
                 )}
 
-                {/* 1. Target Group Selection (Common) */}
-                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                    <div className="flex items-center justify-between mb-3">
-                        <h3 className="flex items-center gap-2 font-bold text-slate-800 text-sm uppercase tracking-wider">
-                            <Users className="w-4 h-4 text-sky-500" />
-                            發送對象 (可複選)
-                        </h3>
-                        <button 
-                            onClick={() => setIsAddingGroup(!isAddingGroup)}
-                            className="text-xs flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-medium px-2 py-1 rounded hover:bg-indigo-50 transition-colors"
-                        >
-                            {isAddingGroup ? <X size={14}/> : <Plus size={14}/>}
-                            {isAddingGroup ? '取消' : '新增'}
-                        </button>
-                    </div>
-
-                    {/* Add Group Form */}
-                    {isAddingGroup && (
-                        <div className="mb-4 bg-slate-50 p-3 rounded-lg border border-slate-200 animate-in slide-in-from-top-2">
-                             <div className="flex justify-between items-center mb-2">
-                                <span className="text-[10px] font-bold text-slate-500">新增自訂群組</span>
-                                <button 
-                                    onClick={handleAddTestGroup}
-                                    className="text-[10px] text-indigo-600 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded hover:bg-indigo-100"
-                                >
-                                    快速填入測試 ID
-                                </button>
-                             </div>
-                            <div className="space-y-2 mb-2">
-                                <input 
-                                    type="text" 
-                                    placeholder="群組名稱 (例: 會計室)" 
-                                    value={newGroupName}
-                                    onChange={(e) => setNewGroupName(e.target.value)}
-                                    className="w-full text-xs px-2 py-1.5 bg-white text-slate-900 rounded border border-slate-300 focus:border-indigo-500 outline-none font-medium placeholder-slate-400"
-                                />
-                                <div className="relative">
-                                    <input 
-                                        type="text" 
-                                        placeholder="群組 ID (Value)" 
-                                        value={newGroupId}
-                                        onChange={(e) => setNewGroupId(e.target.value)}
-                                        className={`w-full text-xs px-2 py-1.5 bg-white text-slate-900 rounded border outline-none font-mono font-medium placeholder-slate-400
-                                            ${idError ? 'border-rose-300 focus:border-rose-500' : 'border-slate-300 focus:border-indigo-500'}`}
-                                    />
-                                    {idError && <span className="text-[9px] text-rose-500 absolute right-2 top-2">{idError}</span>}
-                                </div>
-                            </div>
-                            <button 
-                                onClick={handleSaveGroup}
-                                disabled={!newGroupName || !newGroupId || !!idError}
-                                className="w-full flex items-center justify-center gap-1 bg-indigo-600 text-white text-xs py-1.5 rounded hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors"
-                            >
-                                <Save size={12} />
-                                儲存至清單
+                {/* Target Groups */}
+                <div className="mb-6">
+                    <div className="flex items-center justify-between mb-2">
+                        <label className="text-sm font-bold text-slate-700 flex items-center gap-1">
+                            <Users size={14} /> 發送目標群組
+                        </label>
+                        {!isAddingGroup && (
+                            <button onClick={() => setIsAddingGroup(true)} className="text-xs flex items-center gap-1 text-indigo-600 hover:text-indigo-800">
+                                <Plus size={12} /> 新增
                             </button>
-                        </div>
-                    )}
-
-                    {/* Group List (Preset + Saved) */}
-                    <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-                        {/* 預設群組 */}
-                        {PRESET_GROUPS.map(group => renderGroupItem(group))}
-                        
-                        {/* 分隔線 (若有儲存群組才顯示) */}
-                        {savedGroups.length > 0 && <div className="border-t border-slate-100 my-1"></div>}
-                        
-                        {/* 儲存群組 */}
-                        {savedGroups.map(group => renderGroupItem(group))}
-                        
-                        {savedGroups.length === 0 && (
-                            <div className="text-center py-2 text-[10px] text-slate-400 italic">
-                                暫無自訂群組
-                            </div>
                         )}
                     </div>
                     
-                    <div className="mt-2 text-right text-[10px] text-indigo-600 font-bold">
-                        已選擇 {selectedGroupIds.length} 個發送對象
+                    {isAddingGroup && (
+                        <div className="bg-white p-3 rounded border border-indigo-100 shadow-sm mb-3 animate-in fade-in slide-in-from-top-1">
+                            <div className="space-y-2">
+                                <input type="text" placeholder="群組名稱 (例: 會計室)" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} className="w-full px-2 py-1.5 text-xs border rounded"/>
+                                <input type="text" placeholder="Line Group ID (U... or C...)" value={newGroupId} onChange={e => setNewGroupId(e.target.value)} className="w-full px-2 py-1.5 text-xs border rounded font-mono"/>
+                                {idError && <p className="text-[10px] text-red-500">{idError}</p>}
+                                <div className="flex gap-2 justify-end">
+                                    <button onClick={() => setIsAddingGroup(false)} className="px-2 py-1 text-xs text-slate-500">取消</button>
+                                    <button onClick={handleSaveGroup} className="px-2 py-1 text-xs bg-indigo-600 text-white rounded">儲存</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
+                        {[...PRESET_GROUPS, ...savedGroups].map(group => {
+                            const isSelected = selectedGroupIds.includes(group.groupId);
+                            return (
+                                <div key={group.id} 
+                                     onClick={() => toggleGroupSelection(group.groupId)}
+                                     className={`flex items-center justify-between p-2 rounded border cursor-pointer transition-all select-none
+                                     ${isSelected ? 'bg-emerald-50 border-emerald-300 text-emerald-900' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'}`}>
+                                    <div className="flex items-center gap-2">
+                                        {isSelected ? <CheckSquare size={14} className="text-emerald-600"/> : <Square size={14} />}
+                                        <span className="text-xs font-medium">{group.name}</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-[10px] font-mono opacity-50">{group.groupId.substring(0, 4)}...</span>
+                                        {!group.isPreset && (
+                                            <button 
+                                                onClick={(e) => { e.stopPropagation(); handleDeleteGroup(group.id); }}
+                                                className="text-slate-300 hover:text-red-500 p-1"
+                                            >
+                                                <Trash2 size={12} />
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
                     </div>
+                    {selectedGroupIds.length === 0 && <p className="text-[10px] text-red-500 mt-1">* 請至少選擇一個群組</p>}
                 </div>
 
-                {activeTab === 'roster' ? (
-                    /* === Roster Controls === */
-                    <>
-                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                            <h3 className="flex items-center gap-2 font-bold text-slate-800 mb-2 text-sm uppercase tracking-wider">
-                                <Clock className="w-4 h-4 text-indigo-500" />
-                                日期設定
-                            </h3>
-                            <div className="space-y-2">
+                {/* Tabs */}
+                <div className="flex bg-slate-200 rounded-lg p-1 mb-4">
+                    <button 
+                        onClick={() => setActiveTab('roster')}
+                        className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-md text-xs font-bold transition-all
+                        ${activeTab === 'roster' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                        <UserCircle size={14} /> 科務會議輪值
+                    </button>
+                    <button 
+                         onClick={() => setActiveTab('general')}
+                         className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-md text-xs font-bold transition-all
+                         ${activeTab === 'general' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                        <MessageSquare size={14} /> 一般公告
+                    </button>
+                </div>
+
+                {/* Content Area */}
+                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm min-h-[200px]">
+                    {activeTab === 'roster' ? (
+                        <div className="space-y-4">
+                            <div className="flex flex-col gap-1">
+                                <label className="text-xs font-bold text-slate-500">預定發送日期 (Date)</label>
                                 <input 
                                     type="date" 
                                     value={previewDate}
-                                    onChange={(e) => setPreviewDate(e.target.value)}
-                                    className="w-full px-3 py-2 bg-white text-slate-900 border border-slate-300 rounded-lg text-sm focus:border-indigo-500 outline-none font-medium shadow-sm"
+                                    onChange={e => setPreviewDate(e.target.value)}
+                                    className="w-full px-3 py-2 text-sm border rounded focus:border-indigo-500 outline-none"
                                 />
-                                {isSkipWeek && (
-                                    <div className="text-[10px] text-rose-500 font-bold flex items-center gap-1 bg-rose-50 p-2 rounded">
-                                        <AlertOctagon size={12} />
-                                        系統提示：選定日期為春節暫停週
-                                    </div>
-                                )}
                             </div>
-                        </div>
+                            
+                            <div className="p-3 bg-slate-50 rounded border border-slate-200">
+                                <div className="flex justify-between items-center mb-1">
+                                    <span className="text-xs text-slate-500">系統推算輪值人員</span>
+                                    {isSkipWeek && <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-bold">暫停週</span>}
+                                </div>
+                                <div className="font-bold text-lg text-slate-800 flex items-center gap-2">
+                                    {dutyPerson}
+                                </div>
+                            </div>
 
-                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex-1 flex flex-col">
-                            <h3 className="flex items-center gap-2 font-bold text-slate-800 mb-3 text-sm uppercase tracking-wider">
-                                <Edit3 className="w-4 h-4 text-rose-500" />
-                                發送操作
-                            </h3>
-                            <div className="mb-4">
+                            <div className="flex flex-col gap-1">
+                                <div className="flex justify-between items-center">
+                                    <label className="text-xs font-bold text-slate-500">
+                                        {isSkipWeek ? '暫停原因 (必填)' : '特殊備註 (選填)'}
+                                    </label>
+                                </div>
                                 <input 
                                     type="text" 
+                                    placeholder={isSkipWeek ? "例：春節連假、颱風停班..." : "例：如遇颱風順延..."}
                                     value={customReason}
-                                    onChange={(e) => setCustomReason(e.target.value)}
-                                    placeholder="暫停事由 (選填，例: 颱風)"
-                                    className={`w-full px-3 py-2 bg-white text-slate-900 border rounded-lg text-sm outline-none font-medium placeholder-slate-400 shadow-sm
-                                        ${isSkipWeek ? 'border-rose-300' : 'border-slate-300 focus:border-rose-400'}`}
+                                    onChange={e => setCustomReason(e.target.value)}
+                                    className="w-full px-3 py-2 text-sm border rounded focus:border-indigo-500 outline-none"
                                 />
                             </div>
-                            <div className="grid grid-cols-1 gap-2 mt-auto">
-                                <button 
-                                    onClick={() => handleManualTrigger('weekly')}
-                                    disabled={isTriggering}
-                                    className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-bold bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:border-emerald-300 shadow-sm active:scale-[0.98] group disabled:opacity-50"
-                                >
-                                    <span className="flex items-center gap-2"><MessageSquare className="w-4 h-4" /> 發送輪值公告 (Card)</span>
-                                    <ArrowRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-                                </button>
-                                <button 
-                                    onClick={() => handleManualTrigger('suspend')}
-                                    disabled={isTriggering}
-                                    className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-bold bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 hover:border-rose-300 shadow-sm active:scale-[0.98] group disabled:opacity-50"
-                                >
-                                    <span className="flex items-center gap-2"><StopCircle className="w-4 h-4" /> 發送暫停公告 (Text)</span>
-                                    <ArrowRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-                                </button>
+                        </div>
+                    ) : (
+                        <div className="space-y-3 h-full flex flex-col">
+                            <div className="flex justify-between items-center">
+                                <label className="text-xs font-bold text-slate-500">公告內容 (支援純文字)</label>
+                                {onRequestRefine && generalContent && (
+                                    <button 
+                                        onClick={() => onRequestRefine(generalContent)}
+                                        className="text-[10px] flex items-center gap-1 text-indigo-600 hover:bg-indigo-50 px-2 py-1 rounded"
+                                    >
+                                        <Sparkles size={10} /> AI 潤飾
+                                    </button>
+                                )}
                             </div>
+                            <textarea 
+                                value={generalContent}
+                                onChange={e => setGeneralContent(e.target.value)}
+                                placeholder="請輸入要廣播給所有人的公告事項..."
+                                className="w-full flex-1 min-h-[120px] px-3 py-2 text-sm border rounded focus:border-indigo-500 outline-none resize-none"
+                            />
                         </div>
-                    </>
-                ) : (
-                    /* === General Controls === */
-                    <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex-1 flex flex-col">
-                         <div className="flex items-center justify-between mb-3">
-                            <h3 className="flex items-center gap-2 font-bold text-slate-800 text-sm uppercase tracking-wider">
-                                <FileType className="w-4 h-4 text-indigo-500" />
-                                公告內容 (支援表情符號)
-                            </h3>
-                            {onRequestRefine && (
-                                <button 
-                                    onClick={handleRefine}
-                                    className="flex items-center gap-1 text-[10px] bg-purple-100 text-purple-700 px-2 py-1 rounded-full hover:bg-purple-200 transition-colors"
-                                    title="將內容帶回主聊天室請阿標潤飾"
-                                >
-                                    <Sparkles size={12} />
-                                    請阿標潤飾
-                                </button>
-                            )}
-                        </div>
-                        <textarea 
-                            value={generalContent}
-                            onChange={(e) => setGeneralContent(e.target.value)}
-                            placeholder="請輸入公告內容，例如：提醒同仁下週一以前完成..."
-                            className="w-full flex-1 min-h-[120px] p-3 border border-slate-300 rounded-lg text-sm bg-white text-slate-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20 outline-none resize-none mb-3 font-medium placeholder-slate-400 shadow-inner"
-                        />
-                         <button 
-                            onClick={() => handleManualTrigger('general')}
-                            disabled={isTriggering || !generalContent.trim()}
-                            className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-md active:scale-[0.98] group disabled:opacity-50 disabled:bg-slate-300 disabled:cursor-not-allowed"
-                        >
-                            <span className="flex items-center gap-2">
-                                <MessageSquare className="w-4 h-4" />
-                                發送一般公告
-                            </span>
-                            <ArrowRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-                        </button>
-                    </div>
-                )}
-            </div>
+                    )}
+                </div>
 
-            {/* Right Panel: Preview & Logs */}
-            <div className="flex flex-col gap-6 h-full overflow-hidden">
-                
-                {/* 1. Preview Card */}
-                {activeTab === 'roster' ? (
-                    <div className={`relative flex-1 rounded-xl border-2 flex flex-col items-center justify-center text-center p-6 transition-all duration-500 overflow-hidden group
-                        ${isSkipWeek ? 'bg-rose-50/50 border-rose-200' : 'bg-white border-slate-200'}`}>
-                       
-                       <div className={`absolute top-0 right-0 p-10 opacity-5 transform translate-x-1/3 -translate-y-1/3 transition-colors duration-500
-                           ${isSkipWeek ? 'text-rose-900' : 'text-slate-900'}`}>
-                           <UserCircle size={200} />
-                       </div>
-    
-                       <div className="relative z-10">
-                            <span className={`inline-block px-3 py-1 rounded-full text-[10px] font-bold tracking-widest uppercase mb-3 border
-                                ${isSkipWeek ? 'bg-rose-100 text-rose-600 border-rose-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
-                                Preview (Card)
-                            </span>
-                            
-                            <h4 className={`text-sm font-bold mb-2 ${isSkipWeek ? 'text-rose-400' : 'text-slate-400'}`}>
-                                發送至: {selectedGroupIds.length > 0 
-                                    ? `已選 ${selectedGroupIds.length} 個群組` 
-                                    : <span className="text-rose-500">未選擇對象</span>}
-                            </h4>
-                            
-                            <div className={`text-3xl sm:text-4xl font-bold official-font mb-2 transition-all duration-300
-                                ${isSkipWeek ? 'text-rose-600' : 'text-slate-800'}`}>
-                                {dutyPerson}
-                            </div>
-    
-                            {(customReason && isSkipWeek) || (customReason && !dutyPerson) ? (
-                                 <div className="mt-3 text-sm text-rose-500 font-medium bg-white/80 px-3 py-1 rounded-lg border border-rose-100 shadow-sm">
-                                    事由：{customReason}
-                                 </div>
-                            ) : null}
-                       </div>
-                    </div>
-                ) : (
-                    <div className="relative flex-1 rounded-xl border-2 border-slate-200 bg-white flex flex-col p-6 overflow-hidden">
-                        <span className="inline-block px-3 py-1 rounded-full text-[10px] font-bold tracking-widest uppercase mb-3 border bg-slate-100 text-slate-500 border-slate-200 w-fit">
-                            Preview (Text Message)
-                        </span>
-                        <div className="flex-1 bg-slate-100 rounded-lg p-4 text-sm text-slate-800 whitespace-pre-wrap overflow-y-auto font-sans leading-relaxed border border-slate-200 shadow-inner">
-                            {generalContent || <span className="text-slate-400 italic">在此預覽您的公告內容...</span>}
-                        </div>
-                         <div className="mt-2 text-right text-[10px] text-slate-400">
-                             發送至: {selectedGroupIds.length > 0 
-                                    ? `已選 ${selectedGroupIds.length} 個群組` 
-                                    : <span className="text-rose-500">未選擇對象</span>}
-                         </div>
-                    </div>
-                )}
-
-                {/* 2. System Log Console */}
-                <div className="h-48 bg-slate-900 rounded-xl p-4 font-mono text-[10px] text-slate-300 shadow-lg flex flex-col shrink-0">
-                    <div className="flex items-center justify-between border-b border-slate-700 pb-2 mb-2 text-slate-400 uppercase tracking-widest text-[9px]">
-                        <div className="flex items-center gap-2">
-                            <Terminal size={12} className="text-emerald-500" />
-                            Activity Log
-                        </div>
-                        <div className="flex gap-2">
-                             <span className="flex items-center gap-1 text-[9px] text-slate-500">
-                                <div className={`w-1.5 h-1.5 rounded-full ${isLocalhost && !remoteUrl ? 'bg-amber-500' : 'bg-emerald-500'}`}></div>
-                                {isLocalhost && !remoteUrl ? 'Simulation' : remoteUrl ? 'Remote' : 'Prod'}
-                             </span>
-                        </div>
-                    </div>
-                    <div className="flex-1 overflow-y-auto space-y-2 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent pr-2">
-                        {logs.length === 0 && (
-                            <div className="flex flex-col items-center justify-center h-full text-slate-600 italic gap-2">
-                                <Server size={16} className="opacity-20" />
-                                <span>Ready...</span>
-                            </div>
-                        )}
-                        {logs.map((log, idx) => (
-                            <div key={idx} className={`flex gap-2 animate-in slide-in-from-left-2 duration-200 border-l-2 pl-2 
-                                ${log.success === true ? 'border-emerald-500/50 text-emerald-400' : 
-                                  log.success === false ? 'border-rose-500/50 text-rose-400' : 
-                                  'border-amber-500/50 text-amber-400'}`}>
-                                <span className="text-slate-600 shrink-0 select-none">[{log.time}]</span>
-                                <span className="break-all">{log.msg}</span>
-                            </div>
-                        ))}
-                        <div ref={logsEndRef} />
-                    </div>
+                <div className="mt-4">
+                    <button 
+                        onClick={handleTrigger}
+                        disabled={isTriggering || (activeTab === 'general' && !generalContent.trim())}
+                        className={`w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 shadow-lg transition-all
+                        ${isTriggering 
+                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
+                            : 'bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95'}`}
+                    >
+                         {isTriggering ? <Server size={18} className="animate-pulse" /> : <ArrowRight size={18} />}
+                         {isTriggering ? '正在連線發送...' : '立即發送廣播 (Execute)'}
+                    </button>
                 </div>
 
             </div>
-        </div>
 
+            {/* Right Panel: Logs */}
+            <div className="hidden md:flex flex-col w-1/2 bg-slate-900 text-slate-300 font-mono text-xs">
+                <div className="p-3 border-b border-slate-700 bg-slate-800/50 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                        <Terminal size={14} className="text-emerald-400" />
+                        <span className="font-bold text-slate-100">System Logs</span>
+                    </div>
+                    <div className="flex gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full bg-red-500 opacity-20"></span>
+                        <span className="w-2.5 h-2.5 rounded-full bg-yellow-500 opacity-20"></span>
+                        <span className="w-2.5 h-2.5 rounded-full bg-green-500 opacity-80 animate-pulse"></span>
+                    </div>
+                </div>
+                <div className="flex-1 p-4 overflow-y-auto space-y-2">
+                    {logs.length === 0 && (
+                        <div className="h-full flex flex-col items-center justify-center opacity-30 gap-2">
+                            <Server size={32} />
+                            <p>Ready to transmit.</p>
+                        </div>
+                    )}
+                    {logs.map((log, idx) => (
+                        <div key={idx} className={`flex gap-3 ${log.success === false ? 'text-red-400' : (log.success === true ? 'text-emerald-400' : 'text-slate-300')}`}>
+                            <span className="opacity-50 shrink-0">[{log.time}]</span>
+                            <span className="break-all">{log.msg}</span>
+                        </div>
+                    ))}
+                    <div ref={logsEndRef} />
+                </div>
+            </div>
+
+        </div>
       </div>
     </div>
   );

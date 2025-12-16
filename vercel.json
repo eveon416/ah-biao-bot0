@@ -7,7 +7,7 @@
   ],
   "crons": [
     {
-      "path": "/api/cron?type=weekly",
+      "path": "/api/cron.js?type=weekly",
       "schedule": "0 1 * * 1"
     }
   ]
