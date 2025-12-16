@@ -220,8 +220,8 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       else type = 'weekly';
 
       // Construct URL
-      // 重點修正：明確指定 .js 副檔名，避免 Vercel 路由解析錯誤 (404)
-      const apiPath = '/api/cron.js'; 
+      // 回歸標準路由 /api/cron (不帶 .js)，讓 Vercel Serverless Function 機制自動處理
+      const apiPath = '/api/cron'; 
       const baseUrl = (isLocalhost && remoteUrl) ? remoteUrl.replace(/\/$/, '') : '';
       const targetUrl = `${baseUrl}${apiPath}`;
 
@@ -236,8 +236,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       params.append('groupId', selectedGroupIds.join(','));
 
       const fullUrl = `${targetUrl}?${params.toString()}`;
-      // Log URL (hide secret/sensitive info if any, though GET params are visible here)
-      // addLog(`GET ${fullUrl}`); 
 
       try {
           const res = await fetch(fullUrl, { method: 'GET' });
@@ -498,29 +496,29 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
 
             </div>
 
-            {/* Right Panel: Logs */}
-            <div className="hidden md:flex flex-col w-1/2 bg-slate-900 text-slate-300 font-mono text-xs">
-                <div className="p-3 border-b border-slate-700 bg-slate-800/50 flex items-center justify-between">
+            {/* Right Panel: Logs (High Contrast Mode) */}
+            <div className="hidden md:flex flex-col w-1/2 bg-black text-gray-200 font-mono text-xs">
+                <div className="p-3 border-b border-gray-800 bg-gray-900 flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                        <Terminal size={14} className="text-emerald-400" />
-                        <span className="font-bold text-slate-100">System Logs</span>
+                        <Terminal size={14} className="text-green-400" />
+                        <span className="font-bold text-white">System Console</span>
                     </div>
                     <div className="flex gap-1.5">
-                        <span className="w-2.5 h-2.5 rounded-full bg-red-500 opacity-20"></span>
-                        <span className="w-2.5 h-2.5 rounded-full bg-yellow-500 opacity-20"></span>
-                        <span className="w-2.5 h-2.5 rounded-full bg-green-500 opacity-80 animate-pulse"></span>
+                        <span className="w-2.5 h-2.5 rounded-full bg-red-500 opacity-50"></span>
+                        <span className="w-2.5 h-2.5 rounded-full bg-yellow-500 opacity-50"></span>
+                        <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></span>
                     </div>
                 </div>
                 <div className="flex-1 p-4 overflow-y-auto space-y-2">
                     {logs.length === 0 && (
-                        <div className="h-full flex flex-col items-center justify-center opacity-30 gap-2">
+                        <div className="h-full flex flex-col items-center justify-center opacity-30 gap-2 text-gray-500">
                             <Server size={32} />
                             <p>Ready to transmit.</p>
                         </div>
                     )}
                     {logs.map((log, idx) => (
-                        <div key={idx} className={`flex gap-3 ${log.success === false ? 'text-red-400' : (log.success === true ? 'text-emerald-400' : 'text-slate-300')}`}>
-                            <span className="opacity-50 shrink-0">[{log.time}]</span>
+                        <div key={idx} className={`flex gap-3 ${log.success === false ? 'text-red-400 font-bold' : (log.success === true ? 'text-green-400 font-bold' : 'text-gray-300')}`}>
+                            <span className="text-gray-600 shrink-0">[{log.time}]</span>
                             <span className="break-all">{log.msg}</span>
                         </div>
                     ))}
