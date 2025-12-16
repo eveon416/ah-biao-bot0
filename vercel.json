@@ -1,16 +1,15 @@
 {
-  "rewrites": [
+  "routes": [
     {
-      "source": "/api/cron",
-      "destination": "/api/cron.js"
+      "src": "/api/(.*)",
+      "dest": "/api/$1"
     },
     {
-      "source": "/api/webhook",
-      "destination": "/api/webhook.js"
+      "handle": "filesystem"
     },
     {
-      "source": "/((?!api/|_next/|static/|.*\\..*).*)",
-      "destination": "/index.html"
+      "src": "/(.*)",
+      "dest": "/index.html"
     }
   ],
   "crons": [

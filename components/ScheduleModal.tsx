@@ -314,6 +314,9 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       
       const url = `${baseUrl}/api/cron?manual=true&type=${type}&date=${previewDate}&reason=${reasonParam}&content=${contentParam}${groupParam}`;
 
+      // DEBUG: 顯示實際請求 URL (隱藏敏感參數)
+      addLog(`📡 GET ${url.replace(baseUrl, '')}`, null);
+
       const response = await fetch(url, {
         method: 'GET'
       });
@@ -322,8 +325,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
          addLog(`❌ 找不到 API (404)`, false);
          if (!isLocalhost) {
               addLog(`ℹ️ API 路徑未找到 (/api/cron)`, null);
-              addLog(`💡 原因：Vercel 需要正確的 Rewrites 設定來識別後端 API。`, null);
-              addLog(`✨ 請等待部署更新後的 vercel.json 生效。`, null);
+              addLog(`💡 Vercel 路由設定正在更新中...`, null);
          } else {
              addLog(`💡 請確認上方「正式站台網址」是否正確。`, null);
              setShowConfig(true); 
