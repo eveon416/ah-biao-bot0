@@ -133,15 +133,16 @@ export default async function handler(req, res) {
   const channelAccessToken = process.env.CHANNEL_ACCESS_TOKEN;
   const channelSecret = process.env.CHANNEL_SECRET;
   
-  // === Target Group Logic ===
-  // 支援多選：接收 comma-separated IDs
+  // === Target Group Logic (支援多重發送) ===
   let targetGroupIds = [];
   
   if (req.query.groupId) {
-      // 優先使用 Query 傳入的 ID (可能有多個，以逗號分隔)
+      // 支援傳入 "id1,id2,id3" 格式
       targetGroupIds = req.query.groupId.split(',').map(id => id.trim()).filter(id => id);
-  } else {
-      // 若無參數，預設使用 AdminHome Env
+  }
+  
+  // 若未指定或解析後為空，且不是手動觸發(即自動排程)，則使用預設環境變數
+  if (targetGroupIds.length === 0 && !isManualRun) {
       const defaultId = process.env.LINE_GROUP_ID_AdminHome || process.env.LINE_GROUP_ID;
       if (defaultId) targetGroupIds.push(defaultId);
   }
@@ -151,7 +152,7 @@ export default async function handler(req, res) {
   }
 
   if (targetGroupIds.length === 0) {
-    return res.status(500).json({ success: false, message: '錯誤：未指定任何目標群組 ID' });
+    return res.status(400).json({ success: false, message: '錯誤：未指定任何目標群組 ID (groupId)' });
   }
 
   try {
@@ -161,7 +162,7 @@ export default async function handler(req, res) {
     // 3. 參數解析
     const actionType = req.query.type || 'weekly'; 
     const customReason = req.query.reason || ''; 
-    const customContent = req.query.content || ''; // 新增：自訂文字內容
+    const customContent = req.query.content || ''; 
     const targetDateStr = req.query.date; 
 
     // 計算目標日期
@@ -195,7 +196,6 @@ export default async function handler(req, res) {
 
     } else {
         // === 輪值公告 (Flex Message) ===
-        // 判斷是否為暫停週 (若為暫停週，自動轉為暫停公告文字)
         if (isSkipWeek(taiwanNow)) {
             const reasonText = customReason || "春節連假或排定休假";
              messagePayload = {
@@ -223,22 +223,25 @@ export default async function handler(req, res) {
         }
     }
 
-    // 5. 執行發送 (迴圈處理多個群組)
+    // 5. 執行發送 (迴圈)
     const results = [];
     const errors = [];
 
     for (const groupId of targetGroupIds) {
+        // 跳過 'default' 這種無效字串 (前端應處理，此為保險)
+        if (groupId === 'default') continue; 
+
         try {
             await client.pushMessage(groupId, messagePayload);
             results.push(groupId);
         } catch (lineError) {
             console.error(`Failed to send to ${groupId}:`, lineError);
-            let errMsg = `[${groupId}] 未知錯誤`;
+            let errMsg = `[${groupId.substring(0, 6)}...] 發送失敗`;
              if (lineError.originalError && lineError.originalError.response && lineError.originalError.response.data) {
                  const detail = lineError.originalError.response.data.message || '';
-                 if (detail.includes('not a member')) errMsg = `[${groupId}] 機器人未入群`;
-                 else if (detail.includes('invalid')) errMsg = `[${groupId}] ID無效`;
-                 else errMsg = `[${groupId}] ${detail}`;
+                 if (detail.includes('not a member')) errMsg = `[${groupId.substring(0, 6)}...] 機器人未入群`;
+                 else if (detail.includes('invalid')) errMsg = `[${groupId.substring(0, 6)}...] ID無效`;
+                 else errMsg = `[${groupId.substring(0, 6)}...] ${detail}`;
              }
             errors.push(errMsg);
         }
@@ -256,7 +259,7 @@ export default async function handler(req, res) {
     } else {
         return res.status(500).json({ 
             success: false, 
-            message: `發送失敗: ${errors.join(', ')}` 
+            message: errors.length > 0 ? `發送失敗: ${errors.join(', ')}` : '未執行任何發送'
         });
     }
 

@@ -17,7 +17,7 @@ interface Group {
   isPreset?: boolean;
 }
 
-// 預設群組定義
+// 預設群組定義 (根據使用者提供之資訊)
 const PRESET_GROUPS: Group[] = [
     { 
         id: 'preset_admin', 
@@ -48,7 +48,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
   
   // Group Management State
   const [savedGroups, setSavedGroups] = useState<Group[]>([]);
-  // 改為多選：儲存被選中的 groupId 字串陣列
+  // 改為多選：儲存被選中的 groupId 字串陣列 (預設選取行政科)
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([PRESET_GROUPS[0].groupId]); 
   
   const [newGroupName, setNewGroupName] = useState('');
@@ -267,14 +267,13 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
 
     setIsTriggering(true);
     
-    // 合併預設與自訂群組以查找名稱
+    // 合併預設與自訂群組以查找名稱，用於顯示 Log
     const allGroups = [...PRESET_GROUPS, ...savedGroups];
     const targetNames = selectedGroupIds.map(id => {
         const g = allGroups.find(group => group.groupId === id);
         return g ? g.name : id.substring(0, 6) + '...';
     });
-    const targetDisplay = targetNames.join(', ');
-
+    
     // 1. 本機 UI 擬稿顯示 (Preview)
     try {
         if (type === 'general') {
@@ -337,11 +336,12 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       try {
         data = await response.json();
       } catch (e) {
+        // 如果不是 JSON，可能是 Vercel 的 HTML 錯誤頁面
         throw new Error(`伺服器回傳格式錯誤 (${response.status})`);
       }
 
-      if (response.status === 500) {
-          addLog(`❌ 部分或全部發送失敗`, false);
+      if (response.status === 500 || response.status === 400) {
+          addLog(`❌ 發送失敗`, false);
           addLog(`📝 訊息: ${data.message}`, false);
           setIsTriggering(false);
           return;
