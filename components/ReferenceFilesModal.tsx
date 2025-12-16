@@ -1,15 +1,91 @@
-import React from 'react';
-import { X, FileText, Calendar, ShieldCheck, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, FileText, Calendar, ShieldCheck, AlertCircle, Plus, Trash2, Save, FolderOpen } from 'lucide-react';
 
 interface ReferenceFilesModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
+interface DocFile {
+  id?: string;
+  title: string;
+  date: string;
+  desc: string;
+  highlight: boolean;
+  category?: string; // 用於自定義文件的分類
+  isCustom?: boolean;
+}
+
+const CATEGORIES = [
+  "機關專屬規範與系統 (Internal)",
+  "政府採購 (核心法規)",
+  "政府採購 (作業指引)",
+  "薪資出納與其他"
+];
+
 const ReferenceFilesModal: React.FC<ReferenceFilesModalProps> = ({ isOpen, onClose }) => {
+  // State for Custom Files
+  const [customFiles, setCustomFiles] = useState<DocFile[]>([]);
+  const [isAdding, setIsAdding] = useState(false);
+  
+  // Form State
+  const [newTitle, setNewTitle] = useState('');
+  const [newCategory, setNewCategory] = useState(CATEGORIES[0]);
+  const [newDesc, setNewDesc] = useState('');
+  const [newDate, setNewDate] = useState('');
+
+  // Load custom files on mount
+  useEffect(() => {
+    if (isOpen) {
+      const saved = localStorage.getItem('custom_docs_v1');
+      if (saved) {
+        try {
+          setCustomFiles(JSON.parse(saved));
+        } catch (e) {
+          console.error("Failed to load custom docs", e);
+        }
+      }
+    }
+  }, [isOpen]);
+
+  const handleSaveCustomDoc = () => {
+    if (!newTitle.trim() || !newDesc.trim()) {
+      alert("請填寫文件標題與說明");
+      return;
+    }
+    
+    const doc: DocFile = {
+      id: Date.now().toString(),
+      title: newTitle.trim(),
+      category: newCategory,
+      date: newDate || new Date().toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' }),
+      desc: newDesc.trim(),
+      highlight: true,
+      isCustom: true
+    };
+
+    const updated = [...customFiles, doc];
+    setCustomFiles(updated);
+    localStorage.setItem('custom_docs_v1', JSON.stringify(updated));
+    
+    // Reset Form
+    setIsAdding(false);
+    setNewTitle('');
+    setNewDesc('');
+    setNewDate('');
+  };
+
+  const handleDeleteCustomDoc = (id: string) => {
+    if (!window.confirm("確定要刪除此文件紀錄嗎？")) return;
+    const updated = customFiles.filter(f => f.id !== id);
+    setCustomFiles(updated);
+    localStorage.setItem('custom_docs_v1', JSON.stringify(updated));
+  };
+
   if (!isOpen) return null;
 
-  const fileGroups = [
+  // Built-in Files
+  const builtInGroups = [
     {
       category: "機關專屬規範與系統 (Internal)",
       files: [
@@ -146,6 +222,15 @@ const ReferenceFilesModal: React.FC<ReferenceFilesModalProps> = ({ isOpen, onClo
     }
   ];
 
+  // Merge Custom Files into Groups
+  const mergedGroups = builtInGroups.map(group => {
+    const groupCustomFiles = customFiles.filter(f => f.category === group.category);
+    return {
+      ...group,
+      files: [...groupCustomFiles, ...group.files]
+    };
+  });
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm transition-all">
       <div className="bg-white w-full max-w-3xl rounded-xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
@@ -154,7 +239,7 @@ const ReferenceFilesModal: React.FC<ReferenceFilesModalProps> = ({ isOpen, onClo
         <div className="bg-indigo-900 text-white px-6 py-4 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-5 h-5 text-emerald-400" />
-            <h2 className="text-lg font-bold tracking-wide official-font">已載入機關規範文件 (共 {fileGroups.reduce((acc, group) => acc + group.files.length, 0)} 份)</h2>
+            <h2 className="text-lg font-bold tracking-wide official-font">機關知識庫管理</h2>
           </div>
           <button 
             onClick={onClose}
@@ -165,25 +250,94 @@ const ReferenceFilesModal: React.FC<ReferenceFilesModalProps> = ({ isOpen, onClo
         </div>
 
         {/* Modal Body */}
-        <div className="p-6 overflow-y-auto bg-slate-50">
+        <div className="p-6 overflow-y-auto bg-slate-50 flex-1">
           
           <div className="mb-6 flex items-start gap-3 bg-amber-50 border border-amber-200 p-3 rounded-lg text-sm text-amber-800">
             <AlertCircle className="w-5 h-5 shrink-0 text-amber-600 mt-0.5" />
             <p>
-              下列文件已全數寫入系統核心記憶。系統將<strong>強制優先引用</strong>這些文件內容（包含 114 年最新修正之採購法規與機關內部審核重點），其權重高於網路搜尋結果。
+              下列文件已寫入系統核心記憶。系統將<strong>強制優先引用</strong>這些文件內容（權重高於網路搜尋）。
+              <br/>
+              您可以點擊下方按鈕新增臨時性的機關內部文件。
             </p>
           </div>
 
+          {/* Add Document Section */}
+          <div className="mb-6">
+              {!isAdding ? (
+                 <button 
+                    onClick={() => setIsAdding(true)}
+                    className="w-full py-3 border-2 border-dashed border-indigo-200 rounded-lg text-indigo-600 font-bold text-sm hover:bg-indigo-50 hover:border-indigo-300 transition-all flex items-center justify-center gap-2"
+                 >
+                    <Plus size={16} />
+                    新增內部參考文件 (Upload Reference)
+                 </button>
+              ) : (
+                 <div className="bg-white p-4 rounded-lg border border-indigo-200 shadow-sm animate-in fade-in slide-in-from-top-2">
+                    <div className="flex justify-between items-center mb-3">
+                        <h3 className="font-bold text-slate-800 text-sm">新增文件資料</h3>
+                        <button onClick={() => setIsAdding(false)} className="text-slate-400 hover:text-slate-600"><X size={16}/></button>
+                    </div>
+                    <div className="space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <input 
+                                type="text" 
+                                placeholder="文件標題 (例: 115年度預算編列注意事項)" 
+                                value={newTitle}
+                                onChange={e => setNewTitle(e.target.value)}
+                                className="w-full px-3 py-2 text-sm border border-slate-300 rounded focus:border-indigo-500 outline-none"
+                            />
+                            <select 
+                                value={newCategory}
+                                onChange={e => setNewCategory(e.target.value)}
+                                className="w-full px-3 py-2 text-sm border border-slate-300 rounded focus:border-indigo-500 outline-none bg-white"
+                            >
+                                {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                             <input 
+                                type="text" 
+                                placeholder="版本日期 (例: 114.12.25)" 
+                                value={newDate}
+                                onChange={e => setNewDate(e.target.value)}
+                                className="w-full px-3 py-2 text-sm border border-slate-300 rounded focus:border-indigo-500 outline-none"
+                            />
+                             <div className="flex items-center text-xs text-slate-500 px-2">
+                                * 此文件將標示為 [最新]
+                             </div>
+                        </div>
+                        <textarea 
+                            placeholder="文件重點摘要或規範內容..." 
+                            value={newDesc}
+                            onChange={e => setNewDesc(e.target.value)}
+                            className="w-full px-3 py-2 text-sm border border-slate-300 rounded focus:border-indigo-500 outline-none min-h-[80px]"
+                        />
+                        <button 
+                            onClick={handleSaveCustomDoc}
+                            className="w-full bg-indigo-600 text-white py-2 rounded text-sm font-bold hover:bg-indigo-700 flex items-center justify-center gap-2"
+                        >
+                            <Save size={16} />
+                            儲存文件
+                        </button>
+                    </div>
+                 </div>
+              )}
+          </div>
+
           <div className="space-y-6">
-            {fileGroups.map((group, groupIndex) => (
+            {mergedGroups.map((group, groupIndex) => (
               <div key={groupIndex}>
-                <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3 ml-1">
+                <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3 ml-1 flex items-center gap-2">
+                  <FolderOpen size={14} />
                   {group.category}
                 </h3>
                 <div className="grid grid-cols-1 gap-3">
-                  {group.files.map((file, index) => (
-                    <div key={index} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex flex-col sm:flex-row gap-3 hover:border-indigo-300 transition-colors group">
-                      <div className="shrink-0 flex items-center justify-center w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 group-hover:bg-indigo-100 group-hover:text-indigo-700 transition-colors mt-1">
+                  {group.files.map((file: any, index: number) => (
+                    <div key={index} className={`bg-white p-3 rounded-lg border shadow-sm flex flex-col sm:flex-row gap-3 transition-colors group relative
+                        ${file.isCustom ? 'border-indigo-200 bg-indigo-50/30' : 'border-slate-200 hover:border-indigo-300'}`}>
+                      
+                      <div className={`shrink-0 flex items-center justify-center w-10 h-10 rounded-full transition-colors mt-1
+                          ${file.isCustom ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500 group-hover:bg-indigo-50 group-hover:text-indigo-600'}`}>
                         <FileText size={20} />
                       </div>
                       
@@ -201,6 +355,11 @@ const ReferenceFilesModal: React.FC<ReferenceFilesModalProps> = ({ isOpen, onClo
                                最新
                              </span>
                           )}
+                           {file.isCustom && (
+                             <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-100 text-indigo-700 border border-indigo-200">
+                               自訂
+                             </span>
+                          )}
                         </div>
                         
                         <p className="text-xs text-slate-600 mb-2 leading-relaxed line-clamp-2">
@@ -213,6 +372,17 @@ const ReferenceFilesModal: React.FC<ReferenceFilesModalProps> = ({ isOpen, onClo
                           <span className="font-mono font-bold text-slate-700">{file.date}</span>
                         </div>
                       </div>
+
+                      {/* Delete Button for Custom Files */}
+                      {file.isCustom && (
+                          <button 
+                            onClick={() => handleDeleteCustomDoc(file.id)}
+                            className="absolute top-2 right-2 p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded transition-colors"
+                            title="刪除文件"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                      )}
                     </div>
                   ))}
                 </div>
