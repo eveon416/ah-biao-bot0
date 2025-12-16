@@ -1,11 +1,8 @@
 {
-  "routes": [
+  "rewrites": [
     {
-      "handle": "filesystem"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/index.html"
+      "source": "/((?!api/|_next/|static/|assets/|favicon.ico).*)",
+      "destination": "/index.html"
     }
   ],
   "crons": [
