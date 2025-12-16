@@ -279,10 +279,11 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
           addLog(`❌ 執行失敗: ${error.message}`, false);
           
           if (error.message.includes('404')) {
-               addLog(`ℹ️ 請檢查 API 路徑是否正確 (${targetUrl})`);
+               addLog(`ℹ️ 請求路徑: ${targetUrl}`);
                if (isLocalhost && !remoteUrl) {
-                   addLog(`⚠️ [重要] 本機環境無後端功能 (No Backend)`, false);
-                   addLog(`💡 請在左側設定「遠端 API 網址」指向正式站台`);
+                   addLog(`⚠️ [重要提示] 本機環境無後端 (No Backend)`);
+                   addLog(`💡 原因: Vite 開發伺服器不支援 /api/* 路徑`);
+                   addLog(`👉 解法: 請在左側設定已部署的 Vercel 網址`);
                }
           }
       } finally {
@@ -500,33 +501,45 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
 
             </div>
 
-            {/* Right Panel: Logs (High Contrast Mode, Reduced Width to 1/3) */}
-            <div className="hidden md:flex flex-col md:w-1/3 bg-black text-gray-200 font-mono text-xs">
-                <div className="p-3 border-b border-gray-800 bg-gray-900 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                        <Terminal size={14} className="text-green-400" />
-                        <span className="font-bold text-white">System Console</span>
+            {/* Right Panel: Logs (System Console Height Reduced to 50%) */}
+            <div className="hidden md:flex flex-col md:w-1/3 border-l border-slate-200 bg-slate-50">
+                {/* Upper Half: Console (50% Height) */}
+                <div className="flex flex-col h-1/2 bg-black text-gray-200 font-mono text-xs shadow-lg z-10">
+                    <div className="p-3 border-b border-gray-800 bg-gray-900 flex items-center justify-between shrink-0">
+                        <div className="flex items-center gap-2">
+                            <Terminal size={14} className="text-green-400" />
+                            <span className="font-bold text-white">System Console</span>
+                        </div>
+                        <div className="flex gap-1.5">
+                            <span className="w-2.5 h-2.5 rounded-full bg-red-500 opacity-50"></span>
+                            <span className="w-2.5 h-2.5 rounded-full bg-yellow-500 opacity-50"></span>
+                            <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></span>
+                        </div>
                     </div>
-                    <div className="flex gap-1.5">
-                        <span className="w-2.5 h-2.5 rounded-full bg-red-500 opacity-50"></span>
-                        <span className="w-2.5 h-2.5 rounded-full bg-yellow-500 opacity-50"></span>
-                        <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></span>
+                    <div className="flex-1 p-4 overflow-y-auto space-y-2">
+                        {logs.length === 0 && (
+                            <div className="h-full flex flex-col items-center justify-center opacity-30 gap-2 text-gray-500">
+                                <Server size={24} />
+                                <p>Ready to transmit.</p>
+                            </div>
+                        )}
+                        {logs.map((log, idx) => (
+                            <div key={idx} className={`flex gap-3 ${log.success === false ? 'text-red-400 font-bold' : (log.success === true ? 'text-green-400 font-bold' : 'text-gray-300')}`}>
+                                <span className="text-gray-600 shrink-0">[{log.time}]</span>
+                                <span className="break-all">{log.msg}</span>
+                            </div>
+                        ))}
+                        <div ref={logsEndRef} />
                     </div>
                 </div>
-                <div className="flex-1 p-4 overflow-y-auto space-y-2">
-                    {logs.length === 0 && (
-                        <div className="h-full flex flex-col items-center justify-center opacity-30 gap-2 text-gray-500">
-                            <Server size={32} />
-                            <p>Ready to transmit.</p>
-                        </div>
-                    )}
-                    {logs.map((log, idx) => (
-                        <div key={idx} className={`flex gap-3 ${log.success === false ? 'text-red-400 font-bold' : (log.success === true ? 'text-green-400 font-bold' : 'text-gray-300')}`}>
-                            <span className="text-gray-600 shrink-0">[{log.time}]</span>
-                            <span className="break-all">{log.msg}</span>
-                        </div>
-                    ))}
-                    <div ref={logsEndRef} />
+
+                {/* Lower Half: Status / Placeholder */}
+                <div className="flex-1 flex flex-col items-center justify-center text-slate-400 bg-slate-50/50">
+                    <div className="w-16 h-16 rounded-full bg-slate-200/50 flex items-center justify-center mb-3">
+                         <Server size={32} className="text-slate-300" />
+                    </div>
+                    <p className="text-xs font-bold text-slate-500">SYSTEM STANDBY</p>
+                    <p className="text-[10px] text-slate-400 mt-1">等待指令輸入...</p>
                 </div>
             </div>
 
