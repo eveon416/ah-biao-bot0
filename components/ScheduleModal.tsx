@@ -281,9 +281,9 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
           if (error.message.includes('404')) {
                addLog(`ℹ️ 請求路徑: ${targetUrl}`);
                if (isLocalhost && !remoteUrl) {
-                   addLog(`⚠️ [重要提示] 本機環境無後端 (No Backend)`);
-                   addLog(`💡 原因: Vite 開發伺服器不支援 /api/* 路徑`);
-                   addLog(`👉 解法: 請在左側設定已部署的 Vercel 網址`);
+                   addLog(`⚠️ [本機測試注意] HTTP 404 是正常的！`, false);
+                   addLog(`💡 您的 Vite 開發伺服器不支援後端功能`, false);
+                   addLog(`👉 請在左側輸入已部署的 Vercel 網址以連線`, false);
                }
           }
       } finally {
