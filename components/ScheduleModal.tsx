@@ -220,7 +220,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       else type = 'weekly';
 
       // Construct URL
-      // 回歸標準路由 /api/cron (不帶 .js)，讓 Vercel Serverless Function 機制自動處理
+      // 使用 /api/cron，vercel.json 已有 rewrite 規則指向 /api/cron.js
       const apiPath = '/api/cron'; 
       const baseUrl = (isLocalhost && remoteUrl) ? remoteUrl.replace(/\/$/, '') : '';
       const targetUrl = `${baseUrl}${apiPath}`;
@@ -277,9 +277,13 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       } catch (error: any) {
           console.error(error);
           addLog(`❌ 執行失敗: ${error.message}`, false);
+          
           if (error.message.includes('404')) {
                addLog(`ℹ️ 請檢查 API 路徑是否正確 (${targetUrl})`);
-               if (isLocalhost && !remoteUrl) addLog(`💡 本機開發環境可能需要設定遠端 Vercel 網址`);
+               if (isLocalhost && !remoteUrl) {
+                   addLog(`⚠️ [重要] 本機環境無後端功能 (No Backend)`, false);
+                   addLog(`💡 請在左側設定「遠端 API 網址」指向正式站台`);
+               }
           }
       } finally {
           setIsTriggering(false);
@@ -307,8 +311,8 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
         {/* Body */}
         <div className="flex flex-1 overflow-hidden">
             
-            {/* Left Panel: Controls */}
-            <div className="w-full md:w-1/2 p-6 overflow-y-auto border-r border-slate-100 bg-slate-50">
+            {/* Left Panel: Controls (Expanded to 2/3) */}
+            <div className="w-full md:w-2/3 p-6 overflow-y-auto border-r border-slate-100 bg-slate-50">
                 
                 {/* Environment Warning */}
                 {isLocalhost && (
@@ -333,7 +337,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                         type="text" 
                                         value={remoteUrl} 
                                         onChange={e => setRemoteUrl(e.target.value)}
-                                        className="flex-1 px-2 py-1 border rounded text-xs"
+                                        className="flex-1 px-2 py-1 border rounded text-xs bg-white text-slate-900"
                                         placeholder="https://..."
                                      />
                                      <button onClick={handleSaveRemoteUrl} className="bg-blue-600 text-white px-2 py-1 rounded text-xs">儲存</button>
@@ -359,8 +363,8 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                     {isAddingGroup && (
                         <div className="bg-white p-3 rounded border border-indigo-100 shadow-sm mb-3 animate-in fade-in slide-in-from-top-1">
                             <div className="space-y-2">
-                                <input type="text" placeholder="群組名稱 (例: 會計室)" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} className="w-full px-2 py-1.5 text-xs border rounded"/>
-                                <input type="text" placeholder="Line Group ID (U... or C...)" value={newGroupId} onChange={e => setNewGroupId(e.target.value)} className="w-full px-2 py-1.5 text-xs border rounded font-mono"/>
+                                <input type="text" placeholder="群組名稱 (例: 會計室)" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} className="w-full px-2 py-1.5 text-xs border rounded bg-white text-slate-900"/>
+                                <input type="text" placeholder="Line Group ID (U... or C...)" value={newGroupId} onChange={e => setNewGroupId(e.target.value)} className="w-full px-2 py-1.5 text-xs border rounded font-mono bg-white text-slate-900"/>
                                 {idError && <p className="text-[10px] text-red-500">{idError}</p>}
                                 <div className="flex gap-2 justify-end">
                                     <button onClick={() => setIsAddingGroup(false)} className="px-2 py-1 text-xs text-slate-500">取消</button>
@@ -428,7 +432,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                     type="date" 
                                     value={previewDate}
                                     onChange={e => setPreviewDate(e.target.value)}
-                                    className="w-full px-3 py-2 text-sm border rounded focus:border-indigo-500 outline-none"
+                                    className="w-full px-3 py-2 text-sm border rounded focus:border-indigo-500 outline-none bg-white text-slate-900"
                                 />
                             </div>
                             
@@ -453,7 +457,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                     placeholder={isSkipWeek ? "例：春節連假、颱風停班..." : "例：如遇颱風順延..."}
                                     value={customReason}
                                     onChange={e => setCustomReason(e.target.value)}
-                                    className="w-full px-3 py-2 text-sm border rounded focus:border-indigo-500 outline-none"
+                                    className="w-full px-3 py-2 text-sm border rounded focus:border-indigo-500 outline-none bg-white text-slate-900"
                                 />
                             </div>
                         </div>
@@ -474,7 +478,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                 value={generalContent}
                                 onChange={e => setGeneralContent(e.target.value)}
                                 placeholder="請輸入要廣播給所有人的公告事項..."
-                                className="w-full flex-1 min-h-[120px] px-3 py-2 text-sm border rounded focus:border-indigo-500 outline-none resize-none"
+                                className="w-full flex-1 min-h-[120px] px-3 py-2 text-sm border rounded focus:border-indigo-500 outline-none resize-none bg-white text-slate-900"
                             />
                         </div>
                     )}
@@ -496,8 +500,8 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
 
             </div>
 
-            {/* Right Panel: Logs (High Contrast Mode) */}
-            <div className="hidden md:flex flex-col w-1/2 bg-black text-gray-200 font-mono text-xs">
+            {/* Right Panel: Logs (High Contrast Mode, Reduced Width to 1/3) */}
+            <div className="hidden md:flex flex-col md:w-1/3 bg-black text-gray-200 font-mono text-xs">
                 <div className="p-3 border-b border-gray-800 bg-gray-900 flex items-center justify-between">
                     <div className="flex items-center gap-2">
                         <Terminal size={14} className="text-green-400" />
