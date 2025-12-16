@@ -113,7 +113,8 @@ function createSuspendText(reason) {
 
 // Vercel Cron Job Handler
 export default async function handler(req, res) {
-  console.log(`[API] Cron Handler invoked (Manual/Auto) at ${new Date().toISOString()}`);
+  // [System] Force Rebuild Tag: v2025-Explicit-Rewrite
+  console.log(`[API] Cron Handler invoked at ${new Date().toISOString()}`);
 
   // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
