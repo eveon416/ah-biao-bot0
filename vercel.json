@@ -1,7 +1,10 @@
 {
   "rewrites": [
     {
-      "source": "/((?!api/|_next/|static/|assets/|favicon.ico).*)",
+      "handle": "filesystem"
+    },
+    {
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ],
