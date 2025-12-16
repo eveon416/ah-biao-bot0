@@ -133,25 +133,30 @@ export default async function handler(req, res) {
   const channelAccessToken = process.env.CHANNEL_ACCESS_TOKEN;
   const channelSecret = process.env.CHANNEL_SECRET;
   
-  // === CRITICAL CHANGE: Default to AdminHome Group ID if not specified ===
-  // 優先順序：Query參數 > AdminHome Env > Test Env > 一般 Env
-  const targetGroupId = req.query.groupId || 
-                        process.env.LINE_GROUP_ID_AdminHome || 
-                        process.env.LINE_GROUP_ID_Test || 
-                        process.env.LINE_GROUP_ID;
+  // === Target Group Logic ===
+  // 支援多選：接收 comma-separated IDs
+  let targetGroupIds = [];
+  
+  if (req.query.groupId) {
+      // 優先使用 Query 傳入的 ID (可能有多個，以逗號分隔)
+      targetGroupIds = req.query.groupId.split(',').map(id => id.trim()).filter(id => id);
+  } else {
+      // 若無參數，預設使用 AdminHome Env
+      const defaultId = process.env.LINE_GROUP_ID_AdminHome || process.env.LINE_GROUP_ID;
+      if (defaultId) targetGroupIds.push(defaultId);
+  }
 
   if (!channelAccessToken || !channelSecret) {
     return res.status(500).json({ success: false, message: '錯誤：未設定 CHANNEL_ACCESS_TOKEN 或 CHANNEL_SECRET' });
   }
 
-  if (!targetGroupId) {
-    return res.status(500).json({ success: false, message: '錯誤：未指定目標群組 ID (請確認 Env: LINE_GROUP_ID_AdminHome)' });
+  if (targetGroupIds.length === 0) {
+    return res.status(500).json({ success: false, message: '錯誤：未指定任何目標群組 ID' });
   }
 
   try {
     const client = new Client({ channelAccessToken, channelSecret });
     let messagePayload;
-    let logMessage = "";
     
     // 3. 參數解析
     const actionType = req.query.type || 'weekly'; 
@@ -167,6 +172,7 @@ export default async function handler(req, res) {
     const taiwanNow = new Date(baseDate.getTime() + (8 * 60 * 60 * 1000));
 
     // 4. 訊息生成邏輯
+    let contentDesc = "";
     if (actionType === 'general') {
         // === 一般公告 (純文字) ===
         if (!customContent) {
@@ -176,7 +182,7 @@ export default async function handler(req, res) {
             type: 'text',
             text: customContent
         };
-        logMessage = `一般公告已發送`;
+        contentDesc = `一般公告`;
 
     } else if (actionType === 'suspend') {
         // === 暫停公告 (純文字) ===
@@ -185,19 +191,18 @@ export default async function handler(req, res) {
             type: 'text',
             text: createSuspendText(reasonText)
         };
-        logMessage = `暫停公告已發送 (事由: ${reasonText})`;
+        contentDesc = `暫停公告 (事由: ${reasonText})`;
 
     } else {
         // === 輪值公告 (Flex Message) ===
         // 判斷是否為暫停週 (若為暫停週，自動轉為暫停公告文字)
         if (isSkipWeek(taiwanNow)) {
-            console.log(`Target Date ${taiwanNow.toISOString()} is a SKIP WEEK. Switching to suspend notice.`);
             const reasonText = customReason || "春節連假或排定休假";
              messagePayload = {
                 type: 'text',
                 text: createSuspendText(reasonText)
             };
-            logMessage = `暫停公告已發送 (自動轉暫停, 事由: ${reasonText})`;
+            contentDesc = `暫停公告 (自動轉暫停, 事由: ${reasonText})`;
         } else {
             // 正常輪值
             const staffList = [
@@ -214,35 +219,46 @@ export default async function handler(req, res) {
     
             const dutyPerson = staffList[targetIndex];
             messagePayload = createRosterFlex(dutyPerson, taiwanNow.toISOString());
-            logMessage = `輪值公告已發送 (本週輪值: ${dutyPerson})`;
+            contentDesc = `輪值公告 (本週: ${dutyPerson})`;
         }
     }
 
-    // 5. 執行發送
-    try {
-        await client.pushMessage(targetGroupId, messagePayload);
-    } catch (lineError) {
-        console.error('LINE API Error:', lineError);
-        
-        let errorMsg = `發送失敗：未知錯誤 (${lineError.statusCode})`;
-        if (lineError.originalError && lineError.originalError.response && lineError.originalError.response.data) {
-             const detail = lineError.originalError.response.data.message || '';
-             if (detail.includes('not a member') || detail.includes('count')) {
-                 errorMsg = '發送失敗：機器人未加入該群組，請先邀請機器人。';
-             } else if (detail.includes('invalid') || detail.includes('to')) {
-                 errorMsg = `發送失敗：無效的 Group ID (${targetGroupId})`;
+    // 5. 執行發送 (迴圈處理多個群組)
+    const results = [];
+    const errors = [];
+
+    for (const groupId of targetGroupIds) {
+        try {
+            await client.pushMessage(groupId, messagePayload);
+            results.push(groupId);
+        } catch (lineError) {
+            console.error(`Failed to send to ${groupId}:`, lineError);
+            let errMsg = `[${groupId}] 未知錯誤`;
+             if (lineError.originalError && lineError.originalError.response && lineError.originalError.response.data) {
+                 const detail = lineError.originalError.response.data.message || '';
+                 if (detail.includes('not a member')) errMsg = `[${groupId}] 機器人未入群`;
+                 else if (detail.includes('invalid')) errMsg = `[${groupId}] ID無效`;
+                 else errMsg = `[${groupId}] ${detail}`;
              }
+            errors.push(errMsg);
         }
-        return res.status(500).json({ success: false, message: errorMsg });
     }
-    
-    return res.status(200).json({ 
-        success: true, 
-        message: logMessage,
-        targetGroup: targetGroupId, 
-        type: actionType,
-        targetDate: taiwanNow.toISOString()
-    });
+
+    if (results.length > 0) {
+        return res.status(200).json({ 
+            success: true, 
+            message: `${contentDesc} 已發送至 ${results.length} 個群組`,
+            sentTo: results,
+            errors: errors.length > 0 ? errors : undefined,
+            type: actionType,
+            targetDate: taiwanNow.toISOString()
+        });
+    } else {
+        return res.status(500).json({ 
+            success: false, 
+            message: `發送失敗: ${errors.join(', ')}` 
+        });
+    }
 
   } catch (error) {
     console.error('Cron Job Error:', error);

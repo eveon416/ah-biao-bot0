@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Calendar, Clock, UserCircle, Play, StopCircle, Terminal, AlertOctagon, Info, MessageSquare, Edit3, CheckCircle2, ArrowRight, Server, Users, Plus, Trash2, Save, AlertTriangle, HelpCircle, Laptop2, Rocket, Globe, Settings, FileType, Sparkles, Copy } from 'lucide-react';
+import { X, Calendar, Clock, UserCircle, Terminal, AlertOctagon, MessageSquare, Edit3, ArrowRight, Server, Users, Plus, Trash2, Save, Laptop2, FileType, Sparkles, Settings, AlertCircle, StopCircle, CheckSquare, Square } from 'lucide-react';
 
 interface ScheduleModalProps {
   isOpen: boolean;
@@ -10,11 +10,28 @@ interface ScheduleModalProps {
   onRequestRefine?: (text: string) => void;
 }
 
-interface SavedGroup {
-  id: string;
+interface Group {
+  id: string; // 識別用 (時間戳或固定字串)
   name: string;
-  groupId: string;
+  groupId: string; // LINE Group ID
+  isPreset?: boolean;
 }
+
+// 預設群組定義
+const PRESET_GROUPS: Group[] = [
+    { 
+        id: 'preset_admin', 
+        name: '行政科 (AdminHome)', 
+        groupId: 'Cb35ecb9f86b1968dd51e476fdc819655', 
+        isPreset: true 
+    },
+    { 
+        id: 'preset_test', 
+        name: '測試群 (Test)', 
+        groupId: 'C7e04d9539515b89958d12658b938acce', 
+        isPreset: true 
+    }
+];
 
 const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenerate, onRequestRefine }) => {
   // Tabs
@@ -30,8 +47,10 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
   const [generalContent, setGeneralContent] = useState('');
   
   // Group Management State
-  const [savedGroups, setSavedGroups] = useState<SavedGroup[]>([]);
-  const [selectedGroupId, setSelectedGroupId] = useState<string>('default'); 
+  const [savedGroups, setSavedGroups] = useState<Group[]>([]);
+  // 改為多選：儲存被選中的 groupId 字串陣列
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([PRESET_GROUPS[0].groupId]); 
+  
   const [newGroupName, setNewGroupName] = useState('');
   const [newGroupId, setNewGroupId] = useState('');
   const [isAddingGroup, setIsAddingGroup] = useState(false);
@@ -121,38 +140,59 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
 
   const handleSaveGroup = () => {
       if (!newGroupName.trim() || !newGroupId.trim() || idError) return;
-      if (savedGroups.some(g => g.groupId === newGroupId.trim())) {
+      
+      // 檢查是否重複 (含預設群組)
+      const allGroups = [...PRESET_GROUPS, ...savedGroups];
+      if (allGroups.some(g => g.groupId === newGroupId.trim())) {
           alert('此 Group ID 已存在於清單中');
           return;
       }
-      const newGroup: SavedGroup = {
+      
+      const newGroup: Group = {
           id: Date.now().toString(),
           name: newGroupName.trim(),
           groupId: newGroupId.trim()
       };
+      
       const updated = [...savedGroups, newGroup];
       setSavedGroups(updated);
       localStorage.setItem('line_groups_v1', JSON.stringify(updated));
       setNewGroupName('');
       setNewGroupId('');
       setIsAddingGroup(false);
-      setSelectedGroupId(newGroup.groupId);
+      
+      // 自動選取新增的群組
+      setSelectedGroupIds(prev => [...prev, newGroup.groupId]);
   };
 
   const handleDeleteGroup = (id: string) => {
       if (!window.confirm('確定要刪除此群組設定嗎？')) return;
+      
+      const groupToDelete = savedGroups.find(g => g.id === id);
       const updated = savedGroups.filter(g => g.id !== id);
       setSavedGroups(updated);
       localStorage.setItem('line_groups_v1', JSON.stringify(updated));
-      if (selectedGroupId === savedGroups.find(g => g.id === id)?.groupId) {
-          setSelectedGroupId('default');
+      
+      if (groupToDelete) {
+          setSelectedGroupIds(prev => prev.filter(gid => gid !== groupToDelete.groupId));
       }
   };
   
-  // 快速加入測試群組
+  // 快速加入測試群組 (如果使用者想手動加其他測試 ID)
   const handleAddTestGroup = () => {
-      setNewGroupName("我的測試群組");
+      setNewGroupName("其他測試群組");
       setNewGroupId("C7e04d9539515b89958d12658b938acce");
+  };
+
+  // 處理多選切換
+  const toggleGroupSelection = (groupId: string) => {
+      setSelectedGroupIds(prev => {
+          if (prev.includes(groupId)) {
+              return prev.filter(id => id !== groupId);
+          } else {
+              return [...prev, groupId];
+          }
+      });
   };
 
   const calculateDuty = (targetDate: Date) => {
@@ -219,11 +259,21 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
 
   const handleManualTrigger = async (type: 'weekly' | 'suspend' | 'general') => {
     if (isTriggering) return;
+    
+    if (selectedGroupIds.length === 0) {
+        alert("請至少選擇一個發送對象！");
+        return;
+    }
+
     setIsTriggering(true);
     
-    const targetName = selectedGroupId === 'default' 
-        ? '行政科群組 (AdminHome)' 
-        : (savedGroups.find(g => g.groupId === selectedGroupId)?.name || '指定群組');
+    // 合併預設與自訂群組以查找名稱
+    const allGroups = [...PRESET_GROUPS, ...savedGroups];
+    const targetNames = selectedGroupIds.map(id => {
+        const g = allGroups.find(group => group.groupId === id);
+        return g ? g.name : id.substring(0, 6) + '...';
+    });
+    const targetDisplay = targetNames.join(', ');
 
     // 1. 本機 UI 擬稿顯示 (Preview)
     try {
@@ -245,7 +295,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
     const effectiveRemoteUrl = remoteUrl.trim().replace(/\/$/, '');
     
     if (isLocalhost && !effectiveRemoteUrl) {
-        addLog(`🔧 [模擬模式] 準備發送至 ${targetName}...`, null);
+        addLog(`🔧 [模擬模式] 準備發送至 ${targetNames.length} 個群組...`, null);
         setTimeout(() => {
             addLog(`✅ 模擬發送成功 (未消耗 API)`, true);
             addLog(`ℹ️ 若要真實發送，請上方輸入正式站台網址。`, null);
@@ -259,8 +309,9 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
     try {
       const reasonParam = encodeURIComponent(customReason || '');
       const contentParam = encodeURIComponent(generalContent || '');
-      const groupParam = selectedGroupId === 'default' ? '' : `&groupId=${selectedGroupId}`;
-      const baseUrl = effectiveRemoteUrl || ''; // 若為空字串，fetch 會自動使用相對路徑 (例如 /api/cron)
+      // 將多個 ID 用逗號分隔傳遞
+      const groupParam = `&groupId=${selectedGroupIds.join(',')}`;
+      const baseUrl = effectiveRemoteUrl || ''; 
       
       const url = `${baseUrl}/api/cron?manual=true&type=${type}&date=${previewDate}&reason=${reasonParam}&content=${contentParam}${groupParam}`;
 
@@ -271,8 +322,9 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       if (response.status === 404) {
          addLog(`❌ 找不到 API (404)`, false);
          if (!isLocalhost) {
-              addLog(`ℹ️ 您正在 Production 環境，但 API 回傳 404。`, null);
-              addLog(`💡 已修正路由設定，請重新部署 vercel.json。`, null);
+              addLog(`ℹ️ API 路徑未找到 (/api/cron)`, null);
+              addLog(`💡 原因：Vercel 需要正確的 Rewrites 設定來識別後端 API。`, null);
+              addLog(`✨ 請等待部署更新後的 vercel.json 生效。`, null);
          } else {
              addLog(`💡 請確認上方「正式站台網址」是否正確。`, null);
              setShowConfig(true); 
@@ -285,33 +337,63 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       try {
         data = await response.json();
       } catch (e) {
-        // 如果不是 JSON，可能是 Vercel 的 HTML 錯誤頁面
-        throw new Error(`伺服器回傳非 JSON 格式 (${response.status})`);
+        throw new Error(`伺服器回傳格式錯誤 (${response.status})`);
       }
 
       if (response.status === 500) {
-          addLog(`❌ 發送失敗`, false);
-          addLog(`📝 原因: ${data.message}`, false);
-          if (data.message.includes('機器人未加入')) {
-               addLog(`💡 請檢查機器人是否已在群組內`, null);
-          }
+          addLog(`❌ 部分或全部發送失敗`, false);
+          addLog(`📝 訊息: ${data.message}`, false);
           setIsTriggering(false);
           return;
       }
 
       if (response.ok && data.success) {
-        addLog(`✅ 廣播成功 (目標: ${targetName})`, true);
+        addLog(`✅ 廣播成功 (目標: ${targetNames.length} 個群組)`, true);
       } else {
         addLog(`❌ 發送失敗：${data.message || '未知錯誤'}`, false);
       }
     } catch (error: any) {
       addLog(`❌ 連線異常：${error.message}`, false);
       if (error.message.includes('Failed to fetch')) {
-          addLog(`⚠️ 跨域阻擋 (CORS)。`, null);
+          addLog(`⚠️ 連線被阻擋 (CORS) 或 URL 錯誤。`, null);
       }
     } finally {
       setIsTriggering(false);
     }
+  };
+
+  // 渲染群組項目 Helper
+  const renderGroupItem = (group: Group) => {
+      const isSelected = selectedGroupIds.includes(group.groupId);
+      return (
+          <div key={group.id} className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-all group select-none
+                ${isSelected ? 'bg-indigo-50 border-indigo-300 shadow-sm' : 'bg-white border-slate-200 hover:bg-slate-50'}`}
+                onClick={() => toggleGroupSelection(group.groupId)}
+          >
+              <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors
+                  ${isSelected ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-300'}`}>
+                  {isSelected && <CheckSquare size={14} />}
+              </div>
+              
+              <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                      <div className="text-sm font-bold text-slate-800 truncate">{group.name}</div>
+                      {group.isPreset && <span className="text-[9px] bg-slate-100 text-slate-500 px-1 rounded border border-slate-200">內建</span>}
+                  </div>
+                  <div className="text-[10px] text-slate-400 truncate font-mono">{group.groupId}</div>
+              </div>
+
+              {!group.isPreset && (
+                  <button 
+                      onClick={(e) => { e.stopPropagation(); handleDeleteGroup(group.id); }}
+                      className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded transition-colors"
+                      title="刪除"
+                  >
+                      <Trash2 size={14} />
+                  </button>
+              )}
+          </div>
+      );
   };
 
   if (!isOpen) return null;
@@ -393,7 +475,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                             value={remoteUrl}
                             onChange={handleRemoteUrlChange}
                             placeholder="例：https://myapp.vercel.app (Prod 環境請留空)"
-                            className="w-full px-3 py-2 text-xs border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none bg-white text-slate-900 placeholder-slate-400"
+                            className="w-full px-3 py-2 text-xs border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none bg-white text-slate-900 placeholder-slate-400 font-medium"
                         />
                     </div>
                 )}
@@ -403,7 +485,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                     <div className="flex items-center justify-between mb-3">
                         <h3 className="flex items-center gap-2 font-bold text-slate-800 text-sm uppercase tracking-wider">
                             <Users className="w-4 h-4 text-sky-500" />
-                            發送對象
+                            發送對象 (可複選)
                         </h3>
                         <button 
                             onClick={() => setIsAddingGroup(!isAddingGroup)}
@@ -418,7 +500,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                     {isAddingGroup && (
                         <div className="mb-4 bg-slate-50 p-3 rounded-lg border border-slate-200 animate-in slide-in-from-top-2">
                              <div className="flex justify-between items-center mb-2">
-                                <span className="text-[10px] font-bold text-slate-500">新增群組</span>
+                                <span className="text-[10px] font-bold text-slate-500">新增自訂群組</span>
                                 <button 
                                     onClick={handleAddTestGroup}
                                     className="text-[10px] text-indigo-600 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded hover:bg-indigo-100"
@@ -429,19 +511,19 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                             <div className="space-y-2 mb-2">
                                 <input 
                                     type="text" 
-                                    placeholder="群組名稱" 
+                                    placeholder="群組名稱 (例: 會計室)" 
                                     value={newGroupName}
                                     onChange={(e) => setNewGroupName(e.target.value)}
-                                    className="w-full text-xs px-2 py-1.5 bg-white text-slate-900 rounded border border-slate-300 focus:border-indigo-500 outline-none"
+                                    className="w-full text-xs px-2 py-1.5 bg-white text-slate-900 rounded border border-slate-300 focus:border-indigo-500 outline-none font-medium placeholder-slate-400"
                                 />
                                 <div className="relative">
                                     <input 
                                         type="text" 
-                                        placeholder="群組 ID (U/C/R...)" 
+                                        placeholder="群組 ID (Value)" 
                                         value={newGroupId}
                                         onChange={(e) => setNewGroupId(e.target.value)}
-                                        className={`w-full text-xs px-2 py-1.5 bg-white text-slate-900 rounded border outline-none font-mono
-                                            ${idError ? 'border-rose-300 focus:border-rose-500 bg-rose-50' : 'border-slate-300 focus:border-indigo-500'}`}
+                                        className={`w-full text-xs px-2 py-1.5 bg-white text-slate-900 rounded border outline-none font-mono font-medium placeholder-slate-400
+                                            ${idError ? 'border-rose-300 focus:border-rose-500' : 'border-slate-300 focus:border-indigo-500'}`}
                                     />
                                     {idError && <span className="text-[9px] text-rose-500 absolute right-2 top-2">{idError}</span>}
                                 </div>
@@ -452,55 +534,31 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                 className="w-full flex items-center justify-center gap-1 bg-indigo-600 text-white text-xs py-1.5 rounded hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors"
                             >
                                 <Save size={12} />
-                                儲存至通訊錄
+                                儲存至清單
                             </button>
                         </div>
                     )}
 
-                    {/* Group List */}
-                    <div className="space-y-2 max-h-32 overflow-y-auto pr-1">
-                        <label className={`flex items-center gap-3 p-2 rounded-lg border cursor-pointer transition-all
-                            ${selectedGroupId === 'default' ? 'bg-indigo-50 border-indigo-200 ring-1 ring-indigo-500/20' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
-                            <input 
-                                type="radio" 
-                                name="targetGroup" 
-                                value="default"
-                                checked={selectedGroupId === 'default'}
-                                onChange={() => setSelectedGroupId('default')}
-                                className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
-                            />
-                            <div className="flex-1">
-                                <div className="text-sm font-bold text-slate-700">行政科 (AdminHome)</div>
-                                <div className="text-[10px] text-slate-400">使用 Env: LINE_GROUP_ID_AdminHome</div>
+                    {/* Group List (Preset + Saved) */}
+                    <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                        {/* 預設群組 */}
+                        {PRESET_GROUPS.map(group => renderGroupItem(group))}
+                        
+                        {/* 分隔線 (若有儲存群組才顯示) */}
+                        {savedGroups.length > 0 && <div className="border-t border-slate-100 my-1"></div>}
+                        
+                        {/* 儲存群組 */}
+                        {savedGroups.map(group => renderGroupItem(group))}
+                        
+                        {savedGroups.length === 0 && (
+                            <div className="text-center py-2 text-[10px] text-slate-400 italic">
+                                暫無自訂群組
                             </div>
-                        </label>
-
-                        {savedGroups.map(group => (
-                            <div key={group.id} className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-all group
-                                ${selectedGroupId === group.groupId ? 'bg-indigo-50 border-indigo-200 ring-1 ring-indigo-500/20' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
-                                <label className="flex items-center gap-3 flex-1 cursor-pointer">
-                                    <input 
-                                        type="radio" 
-                                        name="targetGroup" 
-                                        value={group.groupId}
-                                        checked={selectedGroupId === group.groupId}
-                                        onChange={() => setSelectedGroupId(group.groupId)}
-                                        className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
-                                    />
-                                    <div className="min-w-0">
-                                        <div className="text-sm font-bold text-slate-700 truncate">{group.name}</div>
-                                        <div className="text-[10px] text-slate-400 truncate font-mono">{group.groupId}</div>
-                                    </div>
-                                </label>
-                                <button 
-                                    onClick={() => handleDeleteGroup(group.id)}
-                                    className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded transition-colors opacity-0 group-hover:opacity-100"
-                                    title="刪除"
-                                >
-                                    <Trash2 size={14} />
-                                </button>
-                            </div>
-                        ))}
+                        )}
+                    </div>
+                    
+                    <div className="mt-2 text-right text-[10px] text-indigo-600 font-bold">
+                        已選擇 {selectedGroupIds.length} 個發送對象
                     </div>
                 </div>
 
@@ -517,7 +575,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                     type="date" 
                                     value={previewDate}
                                     onChange={(e) => setPreviewDate(e.target.value)}
-                                    className="w-full px-3 py-2 bg-white text-slate-900 border border-slate-300 rounded-lg text-sm focus:border-indigo-500 outline-none"
+                                    className="w-full px-3 py-2 bg-white text-slate-900 border border-slate-300 rounded-lg text-sm focus:border-indigo-500 outline-none font-medium shadow-sm"
                                 />
                                 {isSkipWeek && (
                                     <div className="text-[10px] text-rose-500 font-bold flex items-center gap-1 bg-rose-50 p-2 rounded">
@@ -539,7 +597,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                     value={customReason}
                                     onChange={(e) => setCustomReason(e.target.value)}
                                     placeholder="暫停事由 (選填，例: 颱風)"
-                                    className={`w-full px-3 py-2 bg-white text-slate-900 border rounded-lg text-sm outline-none
+                                    className={`w-full px-3 py-2 bg-white text-slate-900 border rounded-lg text-sm outline-none font-medium placeholder-slate-400 shadow-sm
                                         ${isSkipWeek ? 'border-rose-300' : 'border-slate-300 focus:border-rose-400'}`}
                                 />
                             </div>
@@ -586,7 +644,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                             value={generalContent}
                             onChange={(e) => setGeneralContent(e.target.value)}
                             placeholder="請輸入公告內容，例如：提醒同仁下週一以前完成..."
-                            className="w-full flex-1 min-h-[120px] p-3 border border-slate-300 rounded-lg text-sm bg-white text-slate-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20 outline-none resize-none mb-3"
+                            className="w-full flex-1 min-h-[120px] p-3 border border-slate-300 rounded-lg text-sm bg-white text-slate-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20 outline-none resize-none mb-3 font-medium placeholder-slate-400 shadow-inner"
                         />
                          <button 
                             onClick={() => handleManualTrigger('general')}
@@ -623,7 +681,9 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                             </span>
                             
                             <h4 className={`text-sm font-bold mb-2 ${isSkipWeek ? 'text-rose-400' : 'text-slate-400'}`}>
-                                發送至: {selectedGroupId === 'default' ? '行政科 (AdminHome)' : (savedGroups.find(g => g.groupId === selectedGroupId)?.name || '...')}
+                                發送至: {selectedGroupIds.length > 0 
+                                    ? `已選 ${selectedGroupIds.length} 個群組` 
+                                    : <span className="text-rose-500">未選擇對象</span>}
                             </h4>
                             
                             <div className={`text-3xl sm:text-4xl font-bold official-font mb-2 transition-all duration-300
@@ -647,7 +707,9 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                             {generalContent || <span className="text-slate-400 italic">在此預覽您的公告內容...</span>}
                         </div>
                          <div className="mt-2 text-right text-[10px] text-slate-400">
-                             發送至: {selectedGroupId === 'default' ? '行政科 (AdminHome)' : (savedGroups.find(g => g.groupId === selectedGroupId)?.name || '...')}
+                             發送至: {selectedGroupIds.length > 0 
+                                    ? `已選 ${selectedGroupIds.length} 個群組` 
+                                    : <span className="text-rose-500">未選擇對象</span>}
                          </div>
                     </div>
                 )}
