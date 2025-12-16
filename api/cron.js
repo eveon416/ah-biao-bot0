@@ -1,3 +1,4 @@
+
 import { Client } from "@line/bot-sdk";
 
 // === 全域設定：需跳過輪值的週次 (以該週「週一」日期為準) ===
@@ -112,6 +113,8 @@ function createSuspendText(reason) {
 
 // Vercel Cron Job Handler
 export default async function handler(req, res) {
+  console.log(`[API] Cron Handler invoked at ${new Date().toISOString()}`);
+
   // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
