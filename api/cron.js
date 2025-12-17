@@ -3,6 +3,8 @@
 import { Client } from "@line/bot-sdk";
 
 // === 全域設定：需跳過輪值的週次 (以該週「週一」日期為準) ===
+// 2025-01-27 (2025春節)
+// 2026-02-16 (2026春節: 2/16-2/22)
 const SKIP_WEEKS = ['2025-01-27', '2026-02-16']; 
 
 // 檢查是否為暫停週
@@ -48,7 +50,7 @@ function getEffectiveWeeksDiff(targetDate, anchorDate) {
     }
 }
 
-// 建立輪值 Flex Message (維持卡片格式)
+// 建立輪值 Flex Message (正常版)
 function createRosterFlex(dutyPerson, dateStr) {
   const dateObj = new Date(dateStr);
   const month = dateObj.getMonth() + 1;
@@ -89,7 +91,7 @@ function createRosterFlex(dutyPerson, dateStr) {
               { type: "text", text: "煩請各位於 週二下班前", color: "#334155", weight: "bold", size: "sm" },
               { type: "text", text: "完成工作日誌 📝", color: "#64748b", size: "sm", margin: "none" },
               { type: "text", text: "俾利輪值同仁於 週三", color: "#334155", weight: "bold", size: "sm", margin: "md" },
-              { type: "text", text: "彙整陳核用印 🈳", color: "#64748b", size: "sm", margin: "none" }
+              { type: "text", text: "彙整陳核用印 📑", color: "#64748b", size: "sm", margin: "none" }
             ]
           },
           { type: "text", text: "辛苦了，祝本週工作順心！💪✨", margin: "xl", size: "xs", color: "#94a3b8", align: "center" }
@@ -99,22 +101,55 @@ function createRosterFlex(dutyPerson, dateStr) {
   };
 }
 
-// 建立暫停公告文字 (改為純文字)
-function createSuspendText(reason) {
+// 建立暫停公告 Flex Message (新版卡片)
+function createSuspendFlex(reason) {
     const displayReason = reason || "國定假日或特殊事由";
-    return `⛔ 【會議暫停公告】
-
-報告同仁早安 ☀️
-因適逢「${displayReason}」，本週科務會議【暫停辦理乙次】。
-
-( 本週暫停輪值，順序遞延 )
-
-祝各位假期愉快，平安順心！✨`;
+    return {
+      type: 'flex',
+      altText: `⛔ 會議暫停公告：${displayReason}`,
+      contents: {
+        type: "bubble",
+        size: "giga",
+        header: {
+          type: "box",
+          layout: "vertical",
+          backgroundColor: "#b91c1c", // Red-700
+          paddingAll: "lg",
+          contents: [
+            { type: "text", text: "⛔ 會議暫停公告", color: "#ffffff", weight: "bold", size: "lg" }
+          ]
+        },
+        body: {
+          type: "box",
+          layout: "vertical",
+          spacing: "md",
+          contents: [
+            { type: "text", text: "報告同仁早安 ☀️", color: "#64748b", size: "sm" },
+            { type: "text", text: "因適逢下列事由，本週暫停：", color: "#334155", size: "md", weight: "bold" },
+            { type: "separator", color: "#cbd5e1" },
+            { type: "text", text: displayReason, size: "xl", weight: "bold", color: "#b91c1c", align: "center", margin: "lg", wrap: true },
+            { type: "separator", color: "#cbd5e1", margin: "lg" },
+            {
+              type: "box",
+              layout: "vertical",
+              margin: "lg",
+              spacing: "sm",
+              contents: [
+                { type: "text", text: "⚠️ 注意事項", color: "#334155", weight: "bold", size: "sm" },
+                { type: "text", text: "本週輪值順序遞延 (順延一週)", color: "#64748b", size: "sm", margin: "none" },
+                { type: "text", text: "請各位同仁留意行程安排", color: "#64748b", size: "sm", margin: "none" }
+              ]
+            },
+            { type: "text", text: "祝各位假期愉快，平安順心！✨", margin: "xl", size: "xs", color: "#94a3b8", align: "center" }
+          ]
+        }
+      }
+    };
 }
 
 // Vercel Cron Job Handler
 export default async function handler(req, res) {
-  // [System] Force Rebuild Tag: v2025-Manual-Override
+  // [System] Force Rebuild Tag: v2025-Advanced-Features
   console.log(`[API] Cron Handler invoked at ${new Date().toISOString()}`);
 
   // CORS Headers
@@ -142,11 +177,9 @@ export default async function handler(req, res) {
   let targetGroupIds = [];
   
   if (req.query.groupId) {
-      // 支援傳入 "id1,id2,id3" 格式
       targetGroupIds = req.query.groupId.split(',').map(id => id.trim()).filter(id => id);
   }
   
-  // 若未指定或解析後為空，且不是手動觸發(即自動排程)，則使用預設環境變數
   if (targetGroupIds.length === 0 && !isManualRun) {
       const defaultId = process.env.LINE_GROUP_ID_AdminHome || process.env.LINE_GROUP_ID;
       if (defaultId) targetGroupIds.push(defaultId);
@@ -169,7 +202,18 @@ export default async function handler(req, res) {
     const customReason = req.query.reason || ''; 
     const customContent = req.query.content || ''; 
     const targetDateStr = req.query.date; 
-    const overridePerson = req.query.person; // 新增：指定人員
+    const overridePerson = req.query.person; 
+    const shiftOffset = parseInt(req.query.shift || '0', 10);
+    
+    // 支援前端傳入自定義人員名單
+    let staffList = [
+        '林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰',
+        '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'
+    ];
+    if (req.query.staffList) {
+        const parsedList = req.query.staffList.split(',').map(s => s.trim()).filter(s => s);
+        if (parsedList.length > 0) staffList = parsedList;
+    }
 
     // 計算目標日期
     let baseDate = new Date();
@@ -192,48 +236,42 @@ export default async function handler(req, res) {
         contentDesc = `一般公告`;
 
     } else if (actionType === 'suspend') {
-        // === 暫停公告 (純文字) ===
+        // === 暫停公告 (Flex Message) ===
         const reasonText = customReason || "特殊事由";
-        messagePayload = {
-            type: 'text',
-            text: createSuspendText(reasonText)
-        };
+        messagePayload = createSuspendFlex(reasonText);
         contentDesc = `暫停公告 (事由: ${reasonText})`;
 
     } else {
         // === 輪值公告 (Flex Message) ===
         
-        // 優先檢查是否指定了人員 (Override)
+        // A. 優先檢查是否指定了人員 (Override)
         if (overridePerson) {
              messagePayload = createRosterFlex(overridePerson, taiwanNow.toISOString());
              contentDesc = `輪值公告 (手動指定: ${overridePerson})`;
         } 
-        // 其次檢查是否為系統內建暫停週
+        // B. 其次檢查是否為系統內建暫停週
         else if (isSkipWeek(taiwanNow)) {
             const reasonText = customReason || "春節連假或排定休假";
-             messagePayload = {
-                type: 'text',
-                text: createSuspendText(reasonText)
-            };
+             messagePayload = createSuspendFlex(reasonText);
             contentDesc = `暫停公告 (自動轉暫停, 事由: ${reasonText})`;
         } 
-        // 最後進行自動計算
+        // C. 最後進行自動計算 (含 Shift 偏移)
         else {
-            const staffList = [
-              '林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰',
-              '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'
-            ];
             const anchorDate = new Date('2025-12-08T00:00:00+08:00'); 
-            const anchorIndex = 6;
+            const anchorIndex = 6; // 陳怡妗 (在原始名單中的位置，若名單變更可能需要更複雜的錨點邏輯，此處假設基準點的人員始終對應此Index)
     
             const diffWeeks = getEffectiveWeeksDiff(taiwanNow, anchorDate);
-    
-            let targetIndex = (anchorIndex + diffWeeks) % staffList.length;
+            
+            // shift = -1 代表「往回推一週/順延」
+            // shift = +1 代表「跳過一週」
+            let totalWeeks = diffWeeks + shiftOffset;
+
+            let targetIndex = (anchorIndex + totalWeeks) % staffList.length;
             if (targetIndex < 0) targetIndex = targetIndex + staffList.length;
     
             const dutyPerson = staffList[targetIndex];
             messagePayload = createRosterFlex(dutyPerson, taiwanNow.toISOString());
-            contentDesc = `輪值公告 (本週: ${dutyPerson})`;
+            contentDesc = `輪值公告 (本週: ${dutyPerson}, 偏移: ${shiftOffset})`;
         }
     }
 
@@ -242,7 +280,6 @@ export default async function handler(req, res) {
     const errors = [];
 
     for (const groupId of targetGroupIds) {
-        // 跳過 'default' 這種無效字串 (前端應處理，此為保險)
         if (groupId === 'default') continue; 
 
         try {

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Clock, UserCircle, Terminal, MessageSquare, ArrowRight, Server, Users, Plus, Trash2, Globe, Sparkles, CheckSquare, Square, Settings, RefreshCw, AlertCircle, ShieldAlert, Edit3 } from 'lucide-react';
+import { X, Clock, UserCircle, Terminal, MessageSquare, ArrowRight, Server, Users, Plus, Trash2, Globe, Sparkles, CheckSquare, Square, Settings, RefreshCw, AlertCircle, ShieldAlert, Edit3, Sliders, UserPlus, Minus } from 'lucide-react';
 
 interface ScheduleModalProps {
   isOpen: boolean;
@@ -31,7 +31,7 @@ const PRESET_GROUPS: Group[] = [
     }
 ];
 
-const STAFF_LIST = ['林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰', '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'];
+const DEFAULT_STAFF_LIST = ['林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰', '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'];
 
 const DEFAULT_REMOTE_URL = 'https://ah-biao-bot0.vercel.app';
 
@@ -39,10 +39,17 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
   // Tabs
   const [activeTab, setActiveTab] = useState<'roster' | 'general'>('roster');
 
+  // Staff Management State
+  const [staffList, setStaffList] = useState<string[]>(DEFAULT_STAFF_LIST);
+  const [isManageStaffOpen, setIsManageStaffOpen] = useState(false);
+  const [newStaffName, setNewStaffName] = useState('');
+
   // Roster State
   const [previewDate, setPreviewDate] = useState<string>('');
   const [dutyPerson, setDutyPerson] = useState<string>('');
   const [overridePerson, setOverridePerson] = useState<string>(''); // 手動指定的人員
+  const [calibrationOffset, setCalibrationOffset] = useState<number>(0); // 校正偏移量 (週)
+  
   const [isSkipWeek, setIsSkipWeek] = useState(false); // 系統內建的暫停 (如春節)
   const [forceSuspend, setForceSuspend] = useState(false); // 手動強制暫停 (如颱風)
   const [customReason, setCustomReason] = useState('');
@@ -80,6 +87,17 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       setForceSuspend(false);
       setOverridePerson('');
       
+      // Load settings from localStorage
+      const savedOffset = localStorage.getItem('roster_calibration_offset');
+      setCalibrationOffset(savedOffset ? parseInt(savedOffset, 10) || 0 : 0);
+
+      const savedStaff = localStorage.getItem('roster_staff_list');
+      if (savedStaff) {
+          try { setStaffList(JSON.parse(savedStaff)); } catch(e) {}
+      } else {
+          setStaffList(DEFAULT_STAFF_LIST);
+      }
+
       const hostname = window.location.hostname;
       if (hostname.includes('vercel.app')) {
           setConnectionMode('local');
@@ -122,11 +140,66 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
          const oneWeekMs = 604800000;
          const rawDiffTime = dateObj.getTime() - anchorDate.getTime();
          const rawWeeks = Math.floor(rawDiffTime / oneWeekMs);
-         let targetIndex = (anchorIndex + rawWeeks) % STAFF_LIST.length;
-         if (targetIndex < 0) targetIndex = targetIndex + STAFF_LIST.length;
-         setDutyPerson(`${STAFF_LIST[targetIndex]} (系統預估)`);
+         
+         // Apply calibration offset locally for preview
+         const totalWeeks = rawWeeks + calibrationOffset;
+
+         let targetIndex = (anchorIndex + totalWeeks) % staffList.length;
+         if (targetIndex < 0) targetIndex = targetIndex + staffList.length;
+         setDutyPerson(`${staffList[targetIndex]} (系統預估)`);
      }
-  }, [previewDate, forceSuspend]);
+  }, [previewDate, forceSuspend, calibrationOffset, staffList]);
+
+  const handleCalibrationChange = (delta: number) => {
+      const newOffset = calibrationOffset + delta;
+      setCalibrationOffset(newOffset);
+      localStorage.setItem('roster_calibration_offset', newOffset.toString());
+  };
+
+  // Logic to Set New Anchor based on Override Person
+  const handleSetOverrideAsAnchor = () => {
+      if (!overridePerson || !previewDate) return;
+      if (!window.confirm(`確定要將「${overridePerson}」設為本週 (${previewDate}) 的起始點嗎？\n此操作將會重置整個輪值順序，未來將依此順序遞延。`)) return;
+
+      const dateObj = new Date(previewDate);
+      const anchorDate = new Date('2025-12-08T00:00:00+08:00'); 
+      const anchorIndex = 6; 
+      const oneWeekMs = 604800000;
+      const rawDiffTime = dateObj.getTime() - anchorDate.getTime();
+      const rawWeeks = Math.floor(rawDiffTime / oneWeekMs);
+
+      // Formula: (AnchorIndex + rawWeeks + Offset) % L = TargetIndex
+      // Offset = TargetIndex - AnchorIndex - rawWeeks
+      const targetIndex = staffList.indexOf(overridePerson);
+      if (targetIndex === -1) return;
+
+      let newOffset = (targetIndex - anchorIndex - rawWeeks) % staffList.length;
+      // Adjust negative modulo
+      if (newOffset < 0) newOffset += staffList.length;
+      
+      // Make it closer to 0 (optional optimization to keep numbers small)
+      if (newOffset > staffList.length / 2) newOffset -= staffList.length;
+
+      setCalibrationOffset(newOffset);
+      localStorage.setItem('roster_calibration_offset', newOffset.toString());
+      setOverridePerson(''); // Clear manual override since system now matches
+      alert(`已重置順序！偏移量更新為: ${newOffset} 週`);
+  };
+
+  const handleAddStaff = () => {
+      if (!newStaffName.trim()) return;
+      const updated = [...staffList, newStaffName.trim()];
+      setStaffList(updated);
+      localStorage.setItem('roster_staff_list', JSON.stringify(updated));
+      setNewStaffName('');
+  };
+
+  const handleDeleteStaff = (index: number) => {
+      if (!window.confirm('確定移除此人員？')) return;
+      const updated = staffList.filter((_, i) => i !== index);
+      setStaffList(updated);
+      localStorage.setItem('roster_staff_list', JSON.stringify(updated));
+  };
 
   const scrollToBottom = () => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -194,7 +267,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       else if (isManualSuspendMode) type = 'suspend';
       else type = 'weekly';
 
-      // 檢查強制暫停時的原因必填
       if (isManualSuspendMode && !customReason.trim()) {
           addLog('❌ 錯誤：暫停週請務必填寫「原因」', false);
           alert('請輸入暫停原因 (例如：颱風停班停課)');
@@ -211,10 +283,12 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       const targetUrl = `${baseUrl}${apiPath}`;
       
       addLog(`正在連線至: ${connectionMode === 'remote' ? baseUrl : '[同源本地]'}`);
-      addLog(`目標路徑: ${apiPath}`);
       addLog(`執行模式: ${type}`);
+      if (type === 'weekly' && calibrationOffset !== 0) {
+          addLog(`🔧 輪值校正: ${calibrationOffset > 0 ? '+' : ''}${calibrationOffset} 週`);
+      }
       if (type === 'weekly' && overridePerson) {
-          addLog(`📝 指定人員: ${overridePerson} (Override)`);
+          addLog(`📝 指定人員: ${overridePerson}`);
       }
 
       const params = new URLSearchParams();
@@ -225,9 +299,18 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       params.append('content', generalContent);
       params.append('groupId', selectedGroupIds.join(','));
       
+      // Pass the calibration offset
+      if (calibrationOffset !== 0) {
+          params.append('shift', calibrationOffset.toString());
+      }
+      
+      // Pass the override person
       if (type === 'weekly' && overridePerson) {
           params.append('person', overridePerson);
       }
+
+      // Pass the current staff list (Important for dynamic list)
+      params.append('staffList', staffList.join(','));
 
       const fullUrl = `${targetUrl}?${params.toString()}`;
 
@@ -322,7 +405,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                          
                          {connectionMode === 'remote' && (
                              <div className="mt-3 animate-in fade-in slide-in-from-top-1">
-                                 <label className="block text-[10px] text-slate-500 mb-1">Vercel 專案網址 (無需 /api 結尾)</label>
                                  <div className="flex gap-2">
                                      <input 
                                          type="text" 
@@ -338,15 +420,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                          儲存
                                      </button>
                                  </div>
-                                 <p className="text-[10px] text-emerald-600 mt-1 flex items-center gap-1">
-                                    <CheckSquare size={10} /> 將強制發送請求至此網址
-                                 </p>
                              </div>
-                         )}
-                         {connectionMode === 'local' && (
-                             <p className="text-[10px] text-slate-400 mt-2 px-1">
-                                 * 僅適用於已部署至 Vercel 的環境，或本地有啟動 API Server 時使用。
-                             </p>
                          )}
                     </div>
 
@@ -441,32 +515,99 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                         {overridePerson ? overridePerson : dutyPerson}
                                     </div>
                                     
-                                    {/* 人員指定下拉選單 */}
-                                    <div className="mt-3 pt-3 border-t border-dashed border-slate-200">
+                                    {/* 人員指定下拉選單與重置順序 */}
+                                    <div className="mt-2 pt-2 border-t border-dashed border-slate-200">
                                          <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 mb-1">
                                              <Edit3 size={10} /> 
-                                             指定輪值人員 (Override)
+                                             單次指定人員 (Manual Override)
                                          </label>
-                                         <select 
-                                             value={overridePerson}
-                                             onChange={e => {
-                                                 setOverridePerson(e.target.value);
-                                                 if(e.target.value) setForceSuspend(false); // 選了人就取消暫停
-                                             }}
-                                             className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded bg-white text-slate-700 outline-none focus:border-indigo-500"
-                                         >
-                                             <option value="">-- 使用系統自動推算 (Default) --</option>
-                                             {STAFF_LIST.map(p => (
-                                                 <option key={p} value={p}>{p}</option>
-                                             ))}
-                                         </select>
-                                         <p className="text-[10px] text-slate-400 mt-1">
-                                             * 若選擇指定人員，將強制發送該員卡片，忽略系統暫停或推算結果。
-                                         </p>
+                                         <div className="flex gap-2">
+                                             <select 
+                                                 value={overridePerson}
+                                                 onChange={e => {
+                                                     setOverridePerson(e.target.value);
+                                                     if(e.target.value) setForceSuspend(false); 
+                                                 }}
+                                                 className="flex-1 px-2 py-1.5 text-xs border border-slate-300 rounded bg-white text-slate-700 outline-none focus:border-indigo-500"
+                                             >
+                                                 <option value="">-- 使用系統推算 (Default) --</option>
+                                                 {staffList.map(p => (
+                                                     <option key={p} value={p}>{p}</option>
+                                                 ))}
+                                             </select>
+                                             {overridePerson && (
+                                                <button
+                                                    onClick={handleSetOverrideAsAnchor}
+                                                    className="px-2 py-1.5 bg-indigo-600 text-white text-[10px] rounded hover:bg-indigo-700 whitespace-nowrap"
+                                                    title="未來將從此人員的下一位繼續"
+                                                >
+                                                    以此人重置順序
+                                                </button>
+                                             )}
+                                         </div>
                                     </div>
+                                    
+                                    {/* 輪值校正 (Calibration) */}
+                                    <div className="mt-2 pt-2 border-t border-dashed border-slate-200">
+                                         <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 mb-1">
+                                             <Sliders size={10} /> 
+                                             輪值順序校正 (Global Calibration)
+                                         </label>
+                                         <div className="flex items-center justify-between">
+                                             <div className="flex items-center gap-2">
+                                                 <button 
+                                                     onClick={() => handleCalibrationChange(-1)}
+                                                     className="px-2 py-1 bg-slate-100 rounded text-xs hover:bg-slate-200 flex items-center gap-1"
+                                                     title="颱風順延/補輪值 (Shift Back)"
+                                                 ><Minus size={10}/>順延(颱風)</button>
+                                                 <span className={`text-xs font-mono font-bold w-8 text-center ${calibrationOffset !== 0 ? 'text-blue-600' : 'text-slate-400'}`}>
+                                                     {calibrationOffset > 0 ? '+' : ''}{calibrationOffset}
+                                                 </span>
+                                                 <button 
+                                                     onClick={() => handleCalibrationChange(1)}
+                                                     className="px-2 py-1 bg-slate-100 rounded text-xs hover:bg-slate-200 flex items-center gap-1"
+                                                     title="跳過一週 (Skip)"
+                                                 ><Plus size={10}/>跳過</button>
+                                             </div>
+                                             
+                                             <button 
+                                                 onClick={() => setIsManageStaffOpen(!isManageStaffOpen)}
+                                                 className="text-[10px] text-slate-400 hover:text-indigo-600 flex items-center gap-1 underline"
+                                             >
+                                                 <UserPlus size={10} />
+                                                 {isManageStaffOpen ? '關閉人員管理' : '管理人員名單'}
+                                             </button>
+                                         </div>
+                                    </div>
+
+                                    {/* 人員管理 (展開區塊) */}
+                                    {isManageStaffOpen && (
+                                        <div className="mt-2 p-3 bg-slate-100 rounded border border-slate-200 animate-in fade-in slide-in-from-top-2">
+                                            <label className="block text-[10px] font-bold text-slate-500 mb-2">輪值人員名單 (拖曳功能暫未開放)</label>
+                                            <div className="flex flex-wrap gap-2 mb-3">
+                                                {staffList.map((staff, idx) => (
+                                                    <div key={idx} className="bg-white px-2 py-1 rounded border border-slate-300 text-xs flex items-center gap-1 shadow-sm">
+                                                        {staff}
+                                                        <button onClick={() => handleDeleteStaff(idx)} className="text-slate-400 hover:text-red-500"><X size={10}/></button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            <div className="flex gap-2">
+                                                <input 
+                                                    type="text" 
+                                                    value={newStaffName} 
+                                                    onChange={e => setNewStaffName(e.target.value)}
+                                                    placeholder="新增人員姓名"
+                                                    className="flex-1 px-2 py-1 text-xs border rounded"
+                                                />
+                                                <button onClick={handleAddStaff} className="bg-indigo-600 text-white px-3 py-1 text-xs rounded hover:bg-indigo-700">新增</button>
+                                            </div>
+                                        </div>
+                                    )}
+
                                 </div>
                                 
-                                {/* 突發暫停開關 (若已指定人員，則隱藏或禁用) */}
+                                {/* 突發暫停開關 */}
                                 <div 
                                     className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-all
                                     ${overridePerson 
@@ -486,7 +627,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                             突發狀況 (強制暫停)
                                         </div>
                                         <div className="text-[10px] text-orange-600 opacity-80">
-                                            {overridePerson ? '已手動指定人員，無法暫停。' : '如遇颱風、天災，請勾選此項。'}
+                                            {overridePerson ? '已手動指定人員，無法暫停。' : '將發送「紅色暫停卡片」而非一般輪值卡。'}
                                         </div>
                                     </div>
                                 </div>

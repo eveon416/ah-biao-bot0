@@ -1,5 +1,6 @@
+
 import React, { useState, useEffect } from 'react';
-import { X, FileText, Calendar, ShieldCheck, AlertCircle, Plus, Trash2, Save, FolderOpen } from 'lucide-react';
+import { X, FileText, Calendar, ShieldCheck, AlertCircle, Plus, Trash2, Save, FolderOpen, Layers } from 'lucide-react';
 
 interface ReferenceFilesModalProps {
   isOpen: boolean;
@@ -231,6 +232,9 @@ const ReferenceFilesModal: React.FC<ReferenceFilesModalProps> = ({ isOpen, onClo
     };
   });
 
+  // Calculate total files
+  const totalFilesCount = mergedGroups.reduce((acc, group) => acc + group.files.length, 0);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm transition-all">
       <div className="bg-white w-full max-w-3xl rounded-xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
@@ -240,6 +244,10 @@ const ReferenceFilesModal: React.FC<ReferenceFilesModalProps> = ({ isOpen, onClo
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-5 h-5 text-emerald-400" />
             <h2 className="text-lg font-bold tracking-wide official-font">機關知識庫管理</h2>
+            <div className="flex items-center gap-1 bg-indigo-800 px-2 py-0.5 rounded-full text-[10px] ml-2 border border-indigo-700">
+                <Layers size={10} className="text-indigo-300"/>
+                <span className="text-indigo-200 font-mono">{totalFilesCount} Files</span>
+            </div>
           </div>
           <button 
             onClick={onClose}
