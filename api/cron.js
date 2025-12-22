@@ -135,7 +135,7 @@ function createGeneralMessage(content) {
 export default async function handler(req, res) {
   const now = new Date();
   const tpeNow = getTaiwanDate(now);
-  console.log(`[Cron] Triggered at TPE: ${tpeNow.toISOString()}`);
+  console.log(`[Cron] API Call Triggered at TPE: ${tpeNow.toISOString()}`);
 
   const isManual = req.query.manual === 'true';
   const actionType = req.query.type || 'weekly';
@@ -144,8 +144,12 @@ export default async function handler(req, res) {
   const channelSecret = process.env.CHANNEL_SECRET;
   const defaultGroupId = process.env.LINE_GROUP_ID_AdminHome || process.env.LINE_GROUP_ID;
 
-  if (!channelAccessToken || !defaultGroupId) {
-    return res.status(500).json({ success: false, message: '伺服器端 LINE 設定缺失 (TOKEN 或 ID 未填寫)' });
+  // 環境檢查
+  if (!channelAccessToken) {
+    return res.status(500).json({ success: false, message: '後端缺失：CHANNEL_ACCESS_TOKEN 未設定' });
+  }
+  if (!defaultGroupId && !req.query.groupId) {
+    return res.status(500).json({ success: false, message: '後端缺失：LINE_GROUP_ID 未設定' });
   }
 
   try {
@@ -154,13 +158,11 @@ export default async function handler(req, res) {
 
     let payload;
     
-    // 根據請求類型決定發送內容
     if (actionType === 'general') {
         payload = createGeneralMessage(req.query.content || "無公告內容");
     } else if (actionType === 'suspend') {
         payload = createSuspendFlex(req.query.reason);
     } else {
-        // 預設 Roster (weekly) 邏輯
         const overridePerson = req.query.person;
         if (overridePerson) {
             payload = createRosterFlex(overridePerson, tpeNow.toISOString());
@@ -177,18 +179,34 @@ export default async function handler(req, res) {
         }
     }
 
-    // 發送至所有目標群組
+    // 發送對象處理
     const targetGroupIds = (req.query.groupId || defaultGroupId).split(',');
+    let results = [];
+
     for (const gid of targetGroupIds) {
-      if (gid.trim()) {
-        await client.pushMessage(gid.trim(), payload);
-        console.log(`[Cron] Pushed to ${gid.trim()}`);
+      const cleanGid = gid.trim();
+      if (cleanGid) {
+        try {
+            await client.pushMessage(cleanGid, payload);
+            results.push({ id: cleanGid, status: 'success' });
+            console.log(`[Cron] Pushed to ${cleanGid} successfully.`);
+        } catch (pushError) {
+            console.error(`[Cron] Failed to push to ${cleanGid}:`, pushError.message);
+            results.push({ id: cleanGid, status: 'failed', error: pushError.message });
+        }
       }
     }
 
-    return res.status(200).json({ success: true, tpeDate: formatDate(tpeNow), action: actionType });
+    // 只要有一個成功就回傳成功，否則回傳錯誤
+    const hasSuccess = results.some(r => r.status === 'success');
+    if (hasSuccess) {
+        return res.status(200).json({ success: true, tpeDate: formatDate(tpeNow), action: actionType, results });
+    } else {
+        return res.status(500).json({ success: false, message: '所有目標群組發送皆失敗', details: results });
+    }
+
   } catch (error) {
-    console.error('[Cron Error Detail]', error);
-    return res.status(500).json({ success: false, message: error.message, stack: error.stack });
+    console.error('[Cron Critical Error]', error);
+    return res.status(500).json({ success: false, message: `伺服器內部錯誤: ${error.message}` });
   }
 }

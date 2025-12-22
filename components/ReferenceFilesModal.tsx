@@ -78,7 +78,8 @@ const ReferenceFilesModal: React.FC<ReferenceFilesModalProps> = ({ isOpen, onClo
 
   if (!isOpen) return null;
 
-  const builtInGroups = [
+  // Add explicit type to builtInGroups to ensure all members are treated as DocFile compatible
+  const builtInGroups: { category: string; files: DocFile[] }[] = [
     {
       category: "機關專屬規範與系統 (Internal)",
       files: [

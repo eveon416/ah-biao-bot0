@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Clock, Terminal, RefreshCw, ShieldAlert, CalendarDays, Timer, Settings2, CheckCircle2, Info, SendHorizonal, ListOrdered, CalendarCheck, Trash2, Plus, Users, Globe, UserPlus, UserMinus, Edit3, ArrowUp, ArrowDown, AlertCircle } from 'lucide-react';
+import { X, Clock, Terminal, RefreshCw, ShieldAlert, CalendarDays, Timer, Settings2, CheckCircle2, Info, SendHorizonal, ListOrdered, CalendarCheck, Trash2, Plus, Users, Globe, UserPlus, UserMinus, Edit3, ArrowUp, ArrowDown, AlertCircle, Activity, Link2, MonitorCheck } from 'lucide-react';
 
 interface ScheduleModalProps {
   isOpen: boolean;
@@ -25,6 +25,12 @@ interface ScheduledTask {
   targetName: string;
 }
 
+// Helper function to map day numbers (0-6) to localized string names
+const getDayName = (day: number): string => {
+  const dayNames = ['週日', '週一', '週二', '週三', '週四', '週五', '週六'];
+  return dayNames[day] || '';
+};
+
 const PRESET_GROUPS: Group[] = [
     { id: 'preset_admin', name: '行政科 (AdminHome)', groupId: 'Cb35ecb9f86b1968dd51e476fdc819655', isPreset: true },
     { id: 'preset_test', name: '測試群 (Test)', groupId: 'C7e04d9539515b89958d12658b938acce', isPreset: true }
@@ -38,19 +44,16 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
   const [isEditingStaff, setIsEditingStaff] = useState(false);
   const [newStaffName, setNewStaffName] = useState('');
   
-  // 排程基準設定
   const [configDay, setConfigDay] = useState<number>(1); 
   const [configTime, setConfigTime] = useState<string>('09:00');
   const [isConfigOpen, setIsConfigOpen] = useState(false);
 
-  // 群組管理
   const [savedGroups, setSavedGroups] = useState<Group[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string>(PRESET_GROUPS[0].groupId);
   const [isAddingGroup, setIsAddingGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [newGroupId, setNewGroupId] = useState('');
 
-  // 當前操作狀態
   const [previewDate, setPreviewDate] = useState<string>('');
   const [previewTime, setPreviewTime] = useState<string>('09:00'); 
   const [dutyPerson, setDutyPerson] = useState<string>('');
@@ -60,12 +63,11 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
   const [forceSuspend, setForceSuspend] = useState(false); 
   const [customReason, setCustomReason] = useState('');
 
-  // 公告與連線
   const [generalContent, setGeneralContent] = useState('');
-  const [remoteUrl, setRemoteUrl] = useState(''); // 預設留空，提示使用者設定
+  const [connectionMode, setConnectionMode] = useState<'local' | 'remote'>('local');
+  const [remoteUrl, setRemoteUrl] = useState(''); 
   const [isTriggering, setIsTriggering] = useState(false);
   
-  // 任務與日誌
   const [logs, setLogs] = useState<Array<{time: string, msg: string, success: boolean | null}>>([]);
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
@@ -86,11 +88,12 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       const savedTasks = localStorage.getItem('cfg_scheduled_tasks_v3');
       if (savedTasks) try { setScheduledTasks(JSON.parse(savedTasks)); } catch(e) {}
 
-      // 嘗試獲取目前部署的 URL
-      const currentUrl = window.location.origin;
-      const savedUrl = localStorage.getItem('remote_api_url') || currentUrl;
+      const savedUrl = localStorage.getItem('remote_api_url') || window.location.origin;
       setRemoteUrl(savedUrl);
       
+      const savedMode = localStorage.getItem('cfg_conn_mode') as 'local' | 'remote';
+      if (savedMode) setConnectionMode(savedMode);
+
       const savedOffset = localStorage.getItem('roster_calibration_offset');
       setCalibrationOffset(savedOffset ? parseInt(savedOffset, 10) || 0 : 0);
 
@@ -102,15 +105,8 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
   useEffect(() => {
     localStorage.setItem('cfg_schedule_day', configDay.toString());
     localStorage.setItem('cfg_schedule_time', configTime);
-  }, [configDay, configTime]);
-
-  useEffect(() => {
-    localStorage.setItem('cfg_scheduled_tasks_v3', JSON.stringify(scheduledTasks));
-  }, [scheduledTasks]);
-
-  useEffect(() => {
-    localStorage.setItem('cfg_staff_list_v1', JSON.stringify(staffList));
-  }, [staffList]);
+    localStorage.setItem('cfg_conn_mode', connectionMode);
+  }, [configDay, configTime, connectionMode]);
 
   useEffect(() => {
      if (!previewDate) return;
@@ -144,13 +140,15 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
      }
   }, [previewDate, previewTime, forceSuspend, calibrationOffset, staffList]);
 
+  // 修復日誌無反應：確保 state 變更即時反應
   const addLog = (msg: string, success: boolean | null = null) => {
-    const time = new Date().toLocaleTimeString();
+    const time = new Date().toLocaleTimeString('zh-TW', { hour12: false });
     setLogs(prev => [...prev, { time, msg, success }]);
-    // 立即滾動到最新一筆
+    console.log(`[Admin_System] ${msg}`);
+    
     setTimeout(() => {
         logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, 10);
+    }, 30);
   };
 
   const handleAddStaff = () => {
@@ -158,13 +156,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       setStaffList([...staffList, newStaffName.trim()]);
       setNewStaffName('');
       addLog(`👤 已新增輪值人員：${newStaffName}`);
-    }
-  };
-
-  const handleRemoveStaff = (name: string) => {
-    if (window.confirm(`確定要將「${name}」從輪值名單中刪除嗎？`)) {
-      setStaffList(staffList.filter(s => s !== name));
-      addLog(`👤 已刪除輪值人員：${name}`);
     }
   };
 
@@ -216,32 +207,14 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       await triggerApi(true);
   };
 
-  const handleScheduleTask = () => {
-      const targetName = [...PRESET_GROUPS, ...savedGroups].find(g => g.groupId === selectedGroupId)?.name || '未知群組';
-      const contentText = activeTab === 'roster' ? (overridePerson || dutyPerson) : generalContent.substring(0, 20) + (generalContent.length > 20 ? '...' : '');
-      const newTask: ScheduledTask = {
-          id: Date.now().toString(),
-          date: previewDate,
-          time: previewTime,
-          type: activeTab === 'roster' ? '輪值公告' : '一般行政',
-          content: contentText,
-          targetName: targetName
-      };
-      setScheduledTasks(prev => [newTask, ...prev]);
-      addLog(`📅 已錄入預定任務：${previewDate} ${formatDisplayTime(previewTime)}`);
-  };
-
   const triggerApi = async (isManual: boolean) => {
       setIsTriggering(true);
-      // 確保日誌立即出現
-      addLog(isManual ? '🚀 啟動即時發送程序...' : '🤖 啟動排程模擬程序...');
+      addLog(`🚀 啟動連線程序 [模式: ${connectionMode === 'remote' ? '遠端部署' : '在地路徑'}]`);
 
-      const baseUrl = remoteUrl.replace(/\/$/, '');
+      const baseUrl = connectionMode === 'remote' ? remoteUrl.replace(/\/$/, '') : '';
       const fullUrl = `${baseUrl}/api/cron`;
-
-      if (baseUrl.includes('ah-biao-bot0.vercel.app')) {
-          addLog(`⚠️ 偵測到使用預設範例網址，請確認您的 Vercel 部署路徑是否已正確填寫於「遠端 URL」。`, false);
-      }
+      
+      addLog(`📡 標的網址: ${fullUrl || '/api/cron'}`);
 
       const type = activeTab === 'general' ? 'general' : (isSkipWeek || (forceSuspend && !overridePerson) ? 'suspend' : 'weekly');
       const params = new URLSearchParams({
@@ -257,7 +230,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       if (overridePerson) params.append('person', overridePerson);
 
       try {
-          addLog(`📡 連線中：${fullUrl}`);
+          addLog(`🌐 正在發送 GET 請求...`);
           const res = await fetch(`${fullUrl}?${params.toString()}`, {
               method: 'GET',
               headers: { 'Accept': 'application/json' },
@@ -265,8 +238,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
           });
           
           if (!res.ok) {
-            const errorText = await res.text();
-            throw new Error(`HTTP ${res.status}: ${errorText || '連線拒絕'}`);
+            throw new Error(`連線回應錯誤 (${res.status})`);
           }
           
           const data = await res.json();
@@ -274,22 +246,15 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
               addLog(`✅ LINE 公告發送成功！`, true);
               onGenerate(type as any, overridePerson || dutyPerson || generalContent);
           } else { 
-              throw new Error(data.message || 'API 回傳邏輯錯誤'); 
+              throw new Error(data.message || 'API 回傳邏輯異常'); 
           }
       } catch (error: any) { 
           addLog(`❌ 發送失敗：${error.message}`, false);
-          addLog(`💡 建議：請確認遠端服務器是否已部署且 .env 變數 (TOKEN) 已設定。`);
-          console.error("API Call Error:", error);
+          addLog(`💡 建議：若連線失敗，請檢查 API 路徑或切換「在地路徑」模式測試。`);
       } finally { 
           setIsTriggering(false); 
       }
   };
-
-  const removeTask = (id: string) => {
-      setScheduledTasks(prev => prev.filter(t => t.id !== id));
-  };
-
-  const getDayName = (d: number) => ["週日", "週一", "週二", "週三", "週四", "週五", "週六"][d];
 
   if (!isOpen) return null;
 
@@ -306,12 +271,11 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
         </div>
 
         <div className="flex flex-1 overflow-hidden">
-            {/* Left Main Content */}
+            {/* Left Content */}
             <div className="w-full md:w-2/3 flex flex-col bg-slate-50 border-r border-slate-200 overflow-y-auto p-6 scroll-smooth">
                 
                 {/* 1. 系統基準與群組設定 */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                    {/* 排程基準 */}
                     <div className={`p-4 rounded-xl border transition-all ${isConfigOpen ? 'bg-white border-indigo-500 shadow-md' : 'bg-indigo-900 border-indigo-800 text-indigo-100'}`}>
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
@@ -323,7 +287,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                             </button>
                         </div>
                         <p className="mt-1 text-sm font-bold">每{getDayName(configDay)} {formatDisplayTime(configTime)}</p>
-                        
                         {isConfigOpen && (
                             <div className="mt-3 grid grid-cols-2 gap-2 animate-in slide-in-from-top-1">
                                 <select value={configDay} onChange={e=>setConfigDay(parseInt(e.target.value))} className="p-1.5 text-[10px] border rounded bg-slate-50 text-slate-800 outline-none">
@@ -334,35 +297,52 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                         )}
                     </div>
 
-                    {/* 發布目標群組 */}
                     <div className="p-4 rounded-xl border bg-white border-slate-200 shadow-sm">
                         <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-2 text-indigo-600">
                                 <Globe size={18}/>
                                 <span className="text-xs font-bold">發布目標群組</span>
                             </div>
-                            <button onClick={()=>setIsAddingGroup(!isAddingGroup)} className="p-1 hover:bg-slate-100 rounded text-indigo-600 transition-colors">
-                                <Plus size={16}/>
-                            </button>
+                            <button onClick={()=>setIsAddingGroup(!isAddingGroup)} className="p-1 hover:bg-slate-100 rounded text-indigo-600 transition-colors"><Plus size={16}/></button>
                         </div>
-                        <select value={selectedGroupId} onChange={e=>setSelectedGroupId(e.target.value)} className="w-full p-2 text-xs border rounded bg-slate-50 outline-none cursor-pointer">
+                        <select value={selectedGroupId} onChange={e=>setSelectedGroupId(e.target.value)} className="w-full p-2 text-xs border rounded bg-slate-50 outline-none">
                             {[...PRESET_GROUPS, ...savedGroups].map(g => (
                                 <option key={g.groupId} value={g.groupId}>{g.name}</option>
                             ))}
                         </select>
-                        
-                        <div className="mt-2 bg-slate-50 p-2 rounded border border-slate-100">
-                            <p className="text-[9px] text-slate-400 font-mono uppercase tracking-tighter">Group ID / Token:</p>
-                            <p className="text-[10px] text-indigo-600 font-mono break-all">{selectedGroupId}</p>
+                        <div className="mt-2 bg-slate-50 p-2 rounded border border-slate-100 flex justify-between items-center">
+                            <p className="text-[10px] text-indigo-600 font-mono truncate mr-2">{selectedGroupId}</p>
+                            <span className="text-[8px] text-slate-400 uppercase">Token ID</span>
                         </div>
-                        
                         {isAddingGroup && (
                             <div className="mt-3 p-3 bg-slate-50 rounded-lg border border-slate-200 space-y-2 animate-in zoom-in-95">
                                 <input type="text" placeholder="群組名稱" value={newGroupName} onChange={e=>setNewGroupName(e.target.value)} className="w-full p-1.5 text-[10px] border rounded outline-none" />
-                                <input type="text" placeholder="LINE Group ID / Token" value={newGroupId} onChange={e=>setNewGroupId(e.target.value)} className="w-full p-1.5 text-[10px] border rounded outline-none" />
-                                <button onClick={handleAddGroup} className="w-full py-1.5 bg-indigo-600 text-white text-[10px] font-bold rounded">儲存群組</button>
+                                <input type="text" placeholder="LINE ID / Token" value={newGroupId} onChange={e=>setNewGroupId(e.target.value)} className="w-full p-1.5 text-[10px] border rounded outline-none" />
+                                <button onClick={handleAddGroup} className="w-full py-1.5 bg-indigo-600 text-white text-[10px] font-bold rounded">儲存</button>
                             </div>
                         )}
+                    </div>
+                </div>
+
+                {/* 2. 連線模式切換 */}
+                <div className="mb-6 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                    <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2 text-slate-700 font-bold text-xs">
+                            <MonitorCheck size={16} className="text-emerald-500"/> 連線路徑診斷
+                        </div>
+                        <div className="flex bg-slate-100 p-1 rounded-lg">
+                            <button onClick={()=>setConnectionMode('local')} className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${connectionMode==='local'?'bg-white shadow-sm text-indigo-600':'text-slate-500'}`}>在地路徑</button>
+                            <button onClick={()=>setConnectionMode('remote')} className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${connectionMode==='remote'?'bg-white shadow-sm text-indigo-600':'text-slate-500'}`}>遠端部署</button>
+                        </div>
+                    </div>
+                    {connectionMode === 'remote' && (
+                        <div className="flex gap-2 items-center animate-in slide-in-from-top-1">
+                            <input type="text" placeholder="https://your-app.vercel.app" value={remoteUrl} onChange={e=>setRemoteUrl(e.target.value)} className="flex-1 p-2 text-[11px] font-mono border rounded bg-slate-50 text-indigo-600 outline-none focus:ring-1 focus:ring-indigo-500" />
+                            <button onClick={()=>{localStorage.setItem('remote_api_url', remoteUrl); addLog('💾 遠端 URL 已存儲');}} className="text-[10px] text-indigo-600 underline font-bold shrink-0">儲存</button>
+                        </div>
+                    )}
+                    <div className="mt-2 text-[9px] text-slate-400">
+                        {connectionMode === 'local' ? '💡 目前使用相對路徑 (/api/cron)，適用於當前站點。' : '💡 目前發送請求至外部伺服器網址。'}
                     </div>
                 </div>
 
@@ -378,49 +358,37 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                 <div className="flex items-center justify-between">
                                     <label className="text-xs font-bold text-slate-600 flex items-center gap-1"><Clock size={14}/> 1. 設定發布日期與時間</label>
                                     <div className="flex gap-1">
-                                        <button onClick={()=>setQuickDate('today')} className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-[10px] rounded border border-slate-200 transition-colors">今天</button>
-                                        <button onClick={()=>setQuickDate('thisMon')} className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-[10px] rounded border border-slate-200 transition-colors">本週基準</button>
+                                        <button onClick={()=>setQuickDate('today')} className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-[10px] rounded border border-slate-200">今天</button>
+                                        <button onClick={()=>setQuickDate('thisMon')} className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-[10px] rounded border border-slate-200">本週基準</button>
                                     </div>
                                 </div>
                                 <div className="flex gap-3">
-                                    <div className="w-[50%] relative">
-                                        <input type="date" value={previewDate} onChange={e=>setPreviewDate(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500/20" />
-                                    </div>
-                                    <div className="w-[50%] relative">
-                                        <div className="absolute left-2.5 top-2.5 text-slate-400 pointer-events-none"><Timer size={14}/></div>
-                                        <input type="time" value={previewTime} onChange={e=>setPreviewTime(e.target.value)} className="w-full pl-9 pr-2 py-2 text-sm border rounded-lg bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500/20" />
-                                    </div>
+                                    <input type="date" value={previewDate} onChange={e=>setPreviewDate(e.target.value)} className="flex-1 px-3 py-2 text-sm border rounded-lg bg-slate-50 outline-none" />
+                                    <input type="time" value={previewTime} onChange={e=>setPreviewTime(e.target.value)} className="flex-1 px-3 py-2 text-sm border rounded-lg bg-slate-50 outline-none" />
                                 </div>
                             </div>
 
                             <div className={`p-4 rounded-xl border-2 transition-all ${forceSuspend || isSkipWeek ? 'bg-rose-50 border-rose-200' : 'bg-emerald-50 border-emerald-100'}`}>
                                 <div className="flex justify-between items-center mb-2">
                                     <span className={`text-[10px] uppercase font-bold ${forceSuspend || isSkipWeek ? 'text-rose-400' : 'text-emerald-500'}`}>擬定輪值人員</span>
-                                    <div className="flex items-center gap-2">
-                                        <button onClick={()=>setIsEditingStaff(!isEditingStaff)} className="text-[10px] text-slate-400 hover:text-indigo-600 flex items-center gap-1 transition-colors">
-                                            <Edit3 size={10}/> {isEditingStaff ? '儲存並關閉' : '編輯/排位名單'}
-                                        </button>
-                                        {isSkipWeek && <span className="text-[9px] bg-rose-600 text-white px-2 py-0.5 rounded-full font-bold">預定暫停</span>}
-                                    </div>
+                                    <button onClick={()=>setIsEditingStaff(!isEditingStaff)} className="text-[10px] text-slate-400 hover:text-indigo-600 flex items-center gap-1">
+                                        <Edit3 size={10}/> {isEditingStaff ? '儲存並關閉' : '編輯名單'}
+                                    </button>
                                 </div>
                                 
                                 {isEditingStaff ? (
-                                    <div className="bg-white p-3 rounded-lg border border-slate-200 space-y-3 animate-in fade-in max-h-60 overflow-y-auto custom-scrollbar">
+                                    <div className="bg-white p-3 rounded-lg border border-slate-200 space-y-3 max-h-60 overflow-y-auto custom-scrollbar">
                                         <div className="flex gap-2 sticky top-0 bg-white pb-2 border-b">
-                                            <input type="text" placeholder="輸入人員姓名" value={newStaffName} onChange={e=>setNewStaffName(e.target.value)} className="flex-1 p-2 text-xs border rounded outline-none" />
-                                            <button onClick={handleAddStaff} className="p-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors"><UserPlus size={16}/></button>
+                                            <input type="text" placeholder="姓名" value={newStaffName} onChange={e=>setNewStaffName(e.target.value)} className="flex-1 p-2 text-xs border rounded outline-none" />
+                                            <button onClick={handleAddStaff} className="p-2 bg-indigo-600 text-white rounded"><UserPlus size={16}/></button>
                                         </div>
                                         <div className="space-y-1">
                                             {staffList.map((name, i) => (
-                                                <div key={i} className="flex items-center justify-between bg-slate-50 px-3 py-2 rounded border border-slate-200 group hover:border-indigo-300 transition-colors">
-                                                    <span className="text-[11px] font-bold text-slate-700 flex items-center gap-2">
-                                                        <span className="text-[9px] text-slate-300 font-mono">#{i+1}</span>
-                                                        {name}
-                                                    </span>
+                                                <div key={i} className="flex items-center justify-between bg-slate-50 px-3 py-2 rounded border border-slate-200">
+                                                    <span className="text-[11px] font-bold text-slate-700">#{i+1} {name}</span>
                                                     <div className="flex items-center gap-1">
-                                                        <button onClick={()=>moveStaff(i, 'up')} disabled={i===0} className="p-1 text-slate-400 hover:text-indigo-600 disabled:opacity-20 transition-colors"><ArrowUp size={12}/></button>
-                                                        <button onClick={()=>moveStaff(i, 'down')} disabled={i===staffList.length-1} className="p-1 text-slate-400 hover:text-indigo-600 disabled:opacity-20 transition-colors"><ArrowDown size={12}/></button>
-                                                        <button onClick={()=>handleRemoveStaff(name)} className="p-1 text-rose-300 hover:text-rose-600 ml-1 transition-colors"><UserMinus size={12}/></button>
+                                                        <button onClick={()=>moveStaff(i, 'up')} disabled={i===0} className="p-1 text-slate-400 hover:text-indigo-600 disabled:opacity-20"><ArrowUp size={12}/></button>
+                                                        <button onClick={()=>moveStaff(i, 'down')} disabled={i===staffList.length-1} className="p-1 text-slate-400 hover:text-indigo-600 disabled:opacity-20"><ArrowDown size={12}/></button>
                                                     </div>
                                                 </div>
                                             ))}
@@ -429,126 +397,73 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                 ) : (
                                     <div className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-2 py-2">
                                         {overridePerson || dutyPerson}
-                                        {!forceSuspend && !isSkipWeek && <CheckCircle2 size={20} className="text-emerald-500 animate-in zoom-in duration-300"/>}
+                                        {!forceSuspend && !isSkipWeek && <CheckCircle2 size={20} className="text-emerald-500"/>}
                                     </div>
                                 )}
                                 
                                 <div className="mt-4 flex gap-3 items-center">
-                                     <select value={overridePerson} onChange={e=>setOverridePerson(e.target.value)} className="flex-1 text-xs p-2.5 border rounded-lg bg-white shadow-sm outline-none cursor-pointer">
+                                     <select value={overridePerson} onChange={e=>setOverridePerson(e.target.value)} className="flex-1 text-xs p-2.5 border rounded-lg bg-white outline-none">
                                          <option value="">-- 手動更換為其他同仁 --</option>
                                          {staffList.map(p => <option key={p} value={p}>{p}</option>)}
                                      </select>
-                                     <button onClick={()=>setForceSuspend(!forceSuspend)} className={`p-2.5 rounded-lg border transition-all ${forceSuspend?'bg-rose-600 text-white border-rose-600':'bg-white text-rose-600 border-rose-200 hover:bg-rose-50'}`} title="強制標記為暫停">
+                                     <button onClick={()=>setForceSuspend(!forceSuspend)} className={`p-2.5 rounded-lg border transition-all ${forceSuspend?'bg-rose-600 text-white border-rose-600':'bg-white text-rose-600 border-rose-200'}`}>
                                          <ShieldAlert size={20}/>
                                      </button>
                                 </div>
-                            </div>
-
-                            <div className="space-y-3">
-                                <div>
-                                    <label className="text-xs font-bold text-slate-500">2. 備註事由 (選填)</label>
-                                    <input type="text" placeholder="例：補發公告、日期異動說明..." value={customReason} onChange={e=>setCustomReason(e.target.value)} className="w-full px-4 py-2 mt-1 text-sm border rounded-lg bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"/>
-                                </div>
-                                <button onClick={handleScheduleTask} className="w-full py-3 bg-white border-2 border-indigo-200 text-indigo-700 rounded-xl text-xs font-bold hover:bg-indigo-50 transition-all flex items-center justify-center gap-2 shadow-sm active:scale-[0.98]">
-                                    <CalendarCheck size={18}/> 錄入臨時預定任務 (顯示於右側清單)
-                                </button>
                             </div>
                         </>
                     ) : (
                         <div className="flex flex-col h-full space-y-4">
                             <label className="text-xs font-bold text-slate-500">公告文字內容</label>
-                            <textarea value={generalContent} onChange={e=>setGeneralContent(e.target.value)} className="w-full flex-1 min-h-[160px] p-4 text-sm border rounded-lg bg-slate-50 resize-none outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all" placeholder="報告同仁，請注意以下事項..."/>
-                            <button onClick={handleScheduleTask} className="w-full py-3 bg-white border-2 border-indigo-200 text-indigo-700 rounded-xl text-xs font-bold hover:bg-indigo-50 transition-all flex items-center justify-center gap-2 shadow-sm active:scale-[0.98]">
-                                <CalendarCheck size={18}/> 錄入此公告發布時間
-                            </button>
+                            <textarea value={generalContent} onChange={e=>setGeneralContent(e.target.value)} className="w-full flex-1 min-h-[160px] p-4 text-sm border rounded-lg bg-slate-50 resize-none outline-none" placeholder="報告同仁..."/>
                         </div>
                     )}
                 </div>
 
-                {/* Bottom Action */}
-                <div className="mt-8 space-y-4">
-                    <div className="p-3 bg-slate-100 rounded-lg border flex items-center gap-3">
-                        <div className="bg-slate-200 p-2 rounded text-slate-500"><Globe size={16}/></div>
-                        <div className="flex-1">
-                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">遠端 API URL (Vercel Endpoint)</p>
-                            <input type="text" value={remoteUrl} onChange={e=>setRemoteUrl(e.target.value)} className="w-full bg-transparent border-none text-[11px] font-mono text-indigo-600 p-0 outline-none" placeholder="https://your-app.vercel.app" />
-                        </div>
-                        <button onClick={()=>localStorage.setItem('remote_api_url', remoteUrl)} className="text-[10px] text-indigo-600 underline font-bold">儲存路徑</button>
-                    </div>
-
+                <div className="mt-8">
                     <button onClick={handleImmediateSend} disabled={isTriggering} className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold flex items-center justify-center gap-3 shadow-xl hover:bg-indigo-700 active:scale-[0.98] transition-all disabled:opacity-50">
                         {isTriggering ? <RefreshCw className="animate-spin" size={20}/> : <SendHorizonal size={20}/>}
                         <div className="text-left">
-                            <p className="text-sm">立即發送至 LINE 群組 (手動執行)</p>
-                            <p className="text-[10px] opacity-60 font-normal">直接連線 Vercel API 發送訊息，不經由前端模擬</p>
+                            <p className="text-sm">立即發送至 LINE 群組</p>
+                            <p className="text-[10px] opacity-60 font-normal">連線 API 並推播至選定群組</p>
                         </div>
                     </button>
                 </div>
             </div>
 
-            {/* Right Side Info Bar */}
+            {/* Right Side Logs */}
             <div className="hidden md:flex flex-col md:w-1/3 bg-slate-900 overflow-hidden shrink-0">
-                {/* 上半部：詳細執行日誌 */}
-                <div className="h-1/3 p-4 flex flex-col border-b border-slate-800 bg-slate-950/50">
+                <div className="flex-1 p-4 flex flex-col border-b border-slate-800 bg-slate-950/50">
                     <div className="flex items-center justify-between text-emerald-400 font-mono text-[10px] mb-2 uppercase tracking-widest">
-                        <div className="flex items-center gap-2">
-                            <Terminal size={12}/> <span>System_Execution_Log</span>
-                        </div>
-                        {isTriggering && <div className="animate-pulse flex items-center gap-1"><span className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span> BUSY</div>}
+                        <div className="flex items-center gap-2"><Terminal size={12}/> <span>System_Execution_Log</span></div>
                     </div>
                     <div className="flex-1 overflow-y-auto space-y-1 font-mono text-[10px] custom-scrollbar pr-1 bg-black/30 p-2 rounded border border-white/5 shadow-inner">
-                        {logs.length === 0 && <div className="text-slate-700 italic opacity-40">>> 等待操作指令中...</div>}
+                        {logs.length === 0 && <div className="text-slate-700 italic opacity-40">>> 等待操作指令...</div>}
                         {logs.map((log, idx) => (
-                            <div key={idx} className={`leading-relaxed ${log.success===false?'text-rose-400':(log.success===true?'text-emerald-300':'text-slate-500')}`}>
-                                <span className="opacity-30">[{log.time}]</span> <span className="ml-1">{log.msg}</span>
+                            <div key={idx} className={`leading-relaxed ${log.success===false?'text-rose-400':(log.success===true?'text-emerald-400':'text-slate-300')}`}>
+                                <span className="opacity-30">[{log.time}]</span> <span className="ml-1 font-sans">{log.msg}</span>
                             </div>
                         ))}
                         <div ref={logsEndRef}/>
                     </div>
+                    <div className="mt-2 text-[9px] text-slate-600 font-mono uppercase tracking-tighter flex justify-between">
+                        <span>Status: {isTriggering ? 'Running' : 'Ready'}</span>
+                        <button onClick={()=>setLogs([])} className="hover:text-slate-400">Clear</button>
+                    </div>
                 </div>
 
-                {/* 下半部：預定發布任務預覽 */}
-                <div className="h-2/3 p-4 flex flex-col overflow-hidden bg-slate-900/50">
+                <div className="h-1/2 p-4 flex flex-col overflow-hidden bg-slate-900/50">
                     <div className="flex items-center justify-between text-indigo-300 font-bold text-xs mb-3">
-                        <div className="flex items-center gap-2"><ListOrdered size={14}/> 預定發布任務預覽</div>
-                        <span className="bg-indigo-900 text-[10px] px-2 py-0.5 rounded border border-indigo-800">{scheduledTasks.length}</span>
+                        <div className="flex items-center gap-2"><ListOrdered size={14}/> 預定任務概覽</div>
                     </div>
-                    
                     <div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar pr-1">
-                        {scheduledTasks.length === 0 ? (
-                            <div className="h-full flex flex-col items-center justify-center text-slate-700 italic text-[10px] space-y-2">
-                                <CalendarDays size={20} className="opacity-10"/>
-                                <p>目前尚無預定發布的紀錄</p>
-                            </div>
-                        ) : (
-                            scheduledTasks.map((task) => (
-                                <div key={task.id} className="bg-slate-800 border border-slate-700 rounded-lg p-3 relative group hover:border-indigo-500/50 transition-all shadow-inner animate-in slide-in-from-right-2">
-                                    <div className="flex justify-between items-start mb-1">
-                                        <span className="text-indigo-400 text-[9px] font-bold px-1.5 py-0.5 bg-indigo-950 rounded border border-indigo-900">
-                                            {task.type}
-                                        </span>
-                                        <button onClick={() => removeTask(task.id)} className="text-slate-600 hover:text-rose-400 transition-colors"><Trash2 size={12}/></button>
-                                    </div>
-                                    <div className="text-white text-xs font-bold my-1.5 flex items-center gap-1.5">
-                                        <CalendarDays size={10} className="text-slate-500"/> {task.date}
-                                        <span className="text-slate-600">|</span>
-                                        <Timer size={10} className="text-slate-500"/> {formatDisplayTime(task.time)}
-                                    </div>
-                                    <div className="text-slate-400 text-[10px] line-clamp-2 border-t border-slate-700/50 pt-1.5 mt-1 font-serif italic">
-                                        內容：{task.content}
-                                    </div>
-                                    <div className="text-[9px] text-emerald-500/70 mt-2 uppercase tracking-tighter flex items-center gap-1">
-                                        <Users size={10}/> 對象：{task.targetName}
-                                    </div>
-                                </div>
-                            ))
-                        )}
-                    </div>
-                    
-                    <div className="pt-2 text-[9px] text-slate-600 border-t border-slate-800 mt-2 italic leading-relaxed">
-                        <div className="flex gap-1 items-start">
-                            <AlertCircle size={10} className="shrink-0 mt-0.5"/>
-                            <span>註：此清單僅供瀏覽預覽。正式發送將依照基準時間自動執行，或透過左側按鈕手動即時發送。</span>
+                        <div className="bg-slate-800 border border-slate-700 rounded-lg p-3">
+                            <div className="text-white text-xs font-bold mb-1">本週基準預覽</div>
+                            <div className="text-indigo-400 text-[10px] font-mono">{previewDate} {formatDisplayTime(previewTime)}</div>
+                            <div className="text-emerald-400 text-[11px] mt-2 font-bold">輪值：{overridePerson || dutyPerson}</div>
+                        </div>
+                        <div className="pt-2 text-[9px] text-slate-600 border-t border-slate-800 mt-2 italic">
+                            💡 提示：若系統無反應，請優先切換「連線模式」。
                         </div>
                     </div>
                 </div>
