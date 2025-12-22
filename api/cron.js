@@ -47,7 +47,7 @@ function getEffectiveWeeksDiff(targetTpeDate, anchorTpeDate) {
     return rawDiffTime > 0 ? (rawWeeks - skipCount) : (rawWeeks + skipCount);
 }
 
-// 建立輪值 Flex Message
+// 建立輪值 Flex Message (卡片形式)
 function createRosterFlex(dutyPerson, dateStr) {
   const dateObj = new Date(dateStr);
   const month = dateObj.getUTCMonth() + 1;
@@ -107,18 +107,28 @@ function createSuspendFlex(reason) {
           type: "box",
           layout: "vertical",
           backgroundColor: "#b91c1c",
+          paddingAll: "lg",
           contents: [{ type: "text", text: "⛔ 會議暫停公告", color: "#ffffff", weight: "bold" }]
         },
         body: {
           type: "box",
           layout: "vertical",
+          paddingAll: "lg",
           contents: [
-            { type: "text", text: "本週科務會議因事暫停：", size: "sm", color: "#64748b" },
-            { type: "text", text: reason, weight: "bold", color: "#b91c1c", margin: "md", align: "center", size: "lg" },
-            { type: "text", text: "輪值順序將自動遞延。", size: "xs", color: "#94a3b8", margin: "md", align: "center" }
+            { type: "text", text: "本週科務會議因故暫停：", size: "sm", color: "#64748b" },
+            { type: "text", text: reason || "國定假日或特殊事由", weight: "bold", color: "#b91c1c", margin: "md", align: "center", size: "lg", wrap: true },
+            { type: "text", text: "輪值順序將自動遞延至下週。", size: "xs", color: "#94a3b8", margin: "md", align: "center" }
           ]
         }
       }
+    };
+}
+
+// 建立一般公告 Message
+function createGeneralMessage(content) {
+    return {
+        type: 'text',
+        text: `【行政公告】\n\n${content}\n\n(系統自動發送)`
     };
 }
 
@@ -128,52 +138,57 @@ export default async function handler(req, res) {
   console.log(`[Cron] Triggered at TPE: ${tpeNow.toISOString()}`);
 
   const isManual = req.query.manual === 'true';
-  const authHeader = req.headers['authorization'];
-  if (!isManual && process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return res.status(401).json({ success: false, message: 'Unauthorized' });
-  }
+  const actionType = req.query.type || 'weekly';
 
   const channelAccessToken = process.env.CHANNEL_ACCESS_TOKEN;
   const channelSecret = process.env.CHANNEL_SECRET;
   const defaultGroupId = process.env.LINE_GROUP_ID_AdminHome || process.env.LINE_GROUP_ID;
 
   if (!channelAccessToken || !defaultGroupId) {
-    return res.status(500).json({ success: false, message: 'Missing LINE Config' });
+    return res.status(500).json({ success: false, message: '伺服器端 LINE 設定缺失 (TOKEN 或 ID 未填寫)' });
   }
 
   try {
     const client = new Client({ channelAccessToken, channelSecret });
-    const actionType = req.query.type || 'weekly';
     const staffList = (req.query.staffList || '林唯農,宋憲昌,江開承,吳怡慧,胡蔚杰,陳頤恩,陳怡妗,陳薏雯,游智諺,陳美杏').split(',');
 
     let payload;
-    if (actionType === 'suspend') {
-      payload = createSuspendFlex(req.query.reason || "國定假日或特殊事由");
+    
+    // 根據請求類型決定發送內容
+    if (actionType === 'general') {
+        payload = createGeneralMessage(req.query.content || "無公告內容");
+    } else if (actionType === 'suspend') {
+        payload = createSuspendFlex(req.query.reason);
     } else {
-      const overridePerson = req.query.person;
-      if (overridePerson) {
-        payload = createRosterFlex(overridePerson, tpeNow.toISOString());
-      } else if (isSkipWeek(tpeNow)) {
-        payload = createSuspendFlex("春節連假或排定休假");
-      } else {
-        const anchorDate = new Date('2024-12-09T00:00:00Z'); // 過去的週一作為錨點
-        const anchorIndex = 4; // 調整索引以符合 12/8 為 Index 6 的邏輯
-        const diffWeeks = getEffectiveWeeksDiff(tpeNow, anchorDate);
-        const shift = parseInt(req.query.shift || '0', 10);
-        let targetIndex = (anchorIndex + diffWeeks + shift) % staffList.length;
-        if (targetIndex < 0) targetIndex += staffList.length;
-        payload = createRosterFlex(staffList[targetIndex], tpeNow.toISOString());
+        // 預設 Roster (weekly) 邏輯
+        const overridePerson = req.query.person;
+        if (overridePerson) {
+            payload = createRosterFlex(overridePerson, tpeNow.toISOString());
+        } else if (isSkipWeek(tpeNow)) {
+            payload = createSuspendFlex("適逢連假或系統預設暫停週");
+        } else {
+            const anchorDate = new Date('2024-12-09T00:00:00Z'); 
+            const anchorIndex = 4; 
+            const diffWeeks = getEffectiveWeeksDiff(tpeNow, anchorDate);
+            const shift = parseInt(req.query.shift || '0', 10);
+            let targetIndex = (anchorIndex + diffWeeks + shift) % staffList.length;
+            if (targetIndex < 0) targetIndex += staffList.length;
+            payload = createRosterFlex(staffList[targetIndex], tpeNow.toISOString());
+        }
+    }
+
+    // 發送至所有目標群組
+    const targetGroupIds = (req.query.groupId || defaultGroupId).split(',');
+    for (const gid of targetGroupIds) {
+      if (gid.trim()) {
+        await client.pushMessage(gid.trim(), payload);
+        console.log(`[Cron] Pushed to ${gid.trim()}`);
       }
     }
 
-    const groupIds = (req.query.groupId || defaultGroupId).split(',');
-    for (const gid of groupIds) {
-      await client.pushMessage(gid.trim(), payload);
-    }
-
-    return res.status(200).json({ success: true, tpeDate: formatDate(tpeNow) });
+    return res.status(200).json({ success: true, tpeDate: formatDate(tpeNow), action: actionType });
   } catch (error) {
-    console.error('[Cron Error]', error);
-    return res.status(500).json({ success: false, error: error.message });
+    console.error('[Cron Error Detail]', error);
+    return res.status(500).json({ success: false, message: error.message, stack: error.stack });
   }
 }
