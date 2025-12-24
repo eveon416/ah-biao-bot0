@@ -69,7 +69,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
   const [isTriggering, setIsTriggering] = useState(false);
   
   const [logs, setLogs] = useState<Array<{time: string, msg: string, success: boolean | null}>>([]);
-  const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -84,9 +83,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       
       const savedGroupsData = localStorage.getItem('line_groups_v1');
       if (savedGroupsData) try { setSavedGroups(JSON.parse(savedGroupsData)); } catch (e) {}
-
-      const savedTasks = localStorage.getItem('cfg_scheduled_tasks_v3');
-      if (savedTasks) try { setScheduledTasks(JSON.parse(savedTasks)); } catch(e) {}
 
       const savedUrl = localStorage.getItem('remote_api_url') || window.location.origin;
       setRemoteUrl(savedUrl);
@@ -140,23 +136,18 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
      }
   }, [previewDate, previewTime, forceSuspend, calibrationOffset, staffList]);
 
-  // 修復日誌無反應：確保 state 變更即時反應
+  // 強化的日誌機制，確保在 fetch 阻塞前就能渲染
   const addLog = (msg: string, success: boolean | null = null) => {
     const time = new Date().toLocaleTimeString('zh-TW', { hour12: false });
     setLogs(prev => [...prev, { time, msg, success }]);
-    console.log(`[Admin_System] ${msg}`);
+    console.log(`[AdminLog] ${msg}`);
     
+    // 確保日誌捲動
     setTimeout(() => {
-        logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, 30);
-  };
-
-  const handleAddStaff = () => {
-    if (newStaffName.trim()) {
-      setStaffList([...staffList, newStaffName.trim()]);
-      setNewStaffName('');
-      addLog(`👤 已新增輪值人員：${newStaffName}`);
-    }
+        if (logsEndRef.current) {
+            logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+    }, 50);
   };
 
   const moveStaff = (index: number, direction: 'up' | 'down') => {
@@ -204,17 +195,26 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
   const handleImmediateSend = async () => {
       const targetName = [...PRESET_GROUPS, ...savedGroups].find(g => g.groupId === selectedGroupId)?.name || '未知群組';
       if (!window.confirm(`報告同仁：這將會【立即】發送公告訊息至 ${targetName}，是否執行？`)) return;
+      
+      // 清除舊日誌並開始新程序
+      setLogs([]);
       await triggerApi(true);
   };
 
   const triggerApi = async (isManual: boolean) => {
       setIsTriggering(true);
-      addLog(`🚀 啟動連線程序 [模式: ${connectionMode === 'remote' ? '遠端部署' : '在地路徑'}]`);
-
-      const baseUrl = connectionMode === 'remote' ? remoteUrl.replace(/\/$/, '') : '';
-      const fullUrl = `${baseUrl}/api/cron`;
       
-      addLog(`📡 標的網址: ${fullUrl || '/api/cron'}`);
+      // 1. 立即輸出診斷日誌
+      addLog(`🚀 [系統啟動] 啟動即時發送程序...`);
+      addLog(`🔍 [連線診斷] 模式: ${connectionMode === 'remote' ? '遠端部署' : '在地路徑'}`);
+
+      // 2. 判定網址：在地路徑應使用 window.location.origin
+      const baseUrl = connectionMode === 'remote' 
+        ? remoteUrl.trim().replace(/\/$/, '') 
+        : window.location.origin;
+      
+      const fullUrl = `${baseUrl}/api/cron`;
+      addLog(`📡 [路徑檢核] 標的位址: ${fullUrl}`);
 
       const type = activeTab === 'general' ? 'general' : (isSkipWeek || (forceSuspend && !overridePerson) ? 'suspend' : 'weekly');
       const params = new URLSearchParams({
@@ -230,7 +230,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       if (overridePerson) params.append('person', overridePerson);
 
       try {
-          addLog(`🌐 正在發送 GET 請求...`);
+          addLog(`🌐 [網路連線] 正在發送請求至端點...`);
           const res = await fetch(`${fullUrl}?${params.toString()}`, {
               method: 'GET',
               headers: { 'Accept': 'application/json' },
@@ -238,19 +238,24 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
           });
           
           if (!res.ok) {
-            throw new Error(`連線回應錯誤 (${res.status})`);
+            let errorText = `HTTP ${res.status}`;
+            try { 
+                const errData = await res.json();
+                errorText += `: ${errData.message || '伺服器拒絕連線'}`;
+            } catch(e) {}
+            throw new Error(errorText);
           }
           
           const data = await res.json();
           if (data.success) {
-              addLog(`✅ LINE 公告發送成功！`, true);
+              addLog(`✅ [發送成功] LINE 公告已推播至群組！`, true);
               onGenerate(type as any, overridePerson || dutyPerson || generalContent);
           } else { 
-              throw new Error(data.message || 'API 回傳邏輯異常'); 
+              throw new Error(data.message || 'API 邏輯回應異常'); 
           }
       } catch (error: any) { 
-          addLog(`❌ 發送失敗：${error.message}`, false);
-          addLog(`💡 建議：若連線失敗，請檢查 API 路徑或切換「在地路徑」模式測試。`);
+          addLog(`❌ [發送失敗] ${error.message}`, false);
+          addLog(`💡 [診斷建議] 1. 請檢查 LINE Bot 設定。 2. 嘗試切換「連線模式」測試。`);
       } finally { 
           setIsTriggering(false); 
       }
@@ -271,7 +276,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
         </div>
 
         <div className="flex flex-1 overflow-hidden">
-            {/* Left Content */}
+            {/* Left Content Area */}
             <div className="w-full md:w-2/3 flex flex-col bg-slate-50 border-r border-slate-200 overflow-y-auto p-6 scroll-smooth">
                 
                 {/* 1. 系統基準與群組設定 */}
@@ -318,32 +323,33 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                             <div className="mt-3 p-3 bg-slate-50 rounded-lg border border-slate-200 space-y-2 animate-in zoom-in-95">
                                 <input type="text" placeholder="群組名稱" value={newGroupName} onChange={e=>setNewGroupName(e.target.value)} className="w-full p-1.5 text-[10px] border rounded outline-none" />
                                 <input type="text" placeholder="LINE ID / Token" value={newGroupId} onChange={e=>setNewGroupId(e.target.value)} className="w-full p-1.5 text-[10px] border rounded outline-none" />
-                                <button onClick={handleAddGroup} className="w-full py-1.5 bg-indigo-600 text-white text-[10px] font-bold rounded">儲存</button>
+                                <button onClick={handleAddGroup} className="w-full py-1.5 bg-indigo-600 text-white text-[10px] font-bold rounded">儲存群組</button>
                             </div>
                         )}
                     </div>
                 </div>
 
-                {/* 2. 連線模式切換 */}
+                {/* 2. 連線路徑診斷模式 (這部分與之前的成功模式一致) */}
                 <div className="mb-6 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
                     <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2 text-slate-700 font-bold text-xs">
-                            <MonitorCheck size={16} className="text-emerald-500"/> 連線路徑診斷
+                            <MonitorCheck size={16} className="text-emerald-500"/> 連線模式診斷
                         </div>
                         <div className="flex bg-slate-100 p-1 rounded-lg">
-                            <button onClick={()=>setConnectionMode('local')} className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${connectionMode==='local'?'bg-white shadow-sm text-indigo-600':'text-slate-500'}`}>在地路徑</button>
-                            <button onClick={()=>setConnectionMode('remote')} className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${connectionMode==='remote'?'bg-white shadow-sm text-indigo-600':'text-slate-500'}`}>遠端部署</button>
+                            <button onClick={()=>setConnectionMode('local')} className={`px-4 py-1.5 text-[10px] font-bold rounded-md transition-all ${connectionMode==='local'?'bg-white shadow-sm text-indigo-600':'text-slate-500'}`}>在地路徑</button>
+                            <button onClick={()=>setConnectionMode('remote')} className={`px-4 py-1.5 text-[10px] font-bold rounded-md transition-all ${connectionMode==='remote'?'bg-white shadow-sm text-indigo-600':'text-slate-500'}`}>遠端部署</button>
                         </div>
                     </div>
-                    {connectionMode === 'remote' && (
+                    {connectionMode === 'remote' ? (
                         <div className="flex gap-2 items-center animate-in slide-in-from-top-1">
-                            <input type="text" placeholder="https://your-app.vercel.app" value={remoteUrl} onChange={e=>setRemoteUrl(e.target.value)} className="flex-1 p-2 text-[11px] font-mono border rounded bg-slate-50 text-indigo-600 outline-none focus:ring-1 focus:ring-indigo-500" />
-                            <button onClick={()=>{localStorage.setItem('remote_api_url', remoteUrl); addLog('💾 遠端 URL 已存儲');}} className="text-[10px] text-indigo-600 underline font-bold shrink-0">儲存</button>
+                            <input type="text" placeholder="https://your-app.vercel.app" value={remoteUrl} onChange={e=>setRemoteUrl(e.target.value)} className="flex-1 p-2 text-[11px] font-mono border rounded bg-slate-50 text-indigo-600 outline-none" />
+                            <button onClick={()=>{localStorage.setItem('remote_api_url', remoteUrl); addLog('💾 遠端 URL 已存儲');}} className="text-[10px] text-indigo-600 underline font-bold shrink-0">儲存路徑</button>
+                        </div>
+                    ) : (
+                        <div className="bg-slate-50 p-2.5 rounded border border-dashed border-slate-200 text-[10px] text-slate-500 flex items-center gap-2">
+                             <Info size={12}/> 目前使用原始站點路徑連線：{window.location.origin}/api/cron
                         </div>
                     )}
-                    <div className="mt-2 text-[9px] text-slate-400">
-                        {connectionMode === 'local' ? '💡 目前使用相對路徑 (/api/cron)，適用於當前站點。' : '💡 目前發送請求至外部伺服器網址。'}
-                    </div>
                 </div>
 
                 <div className="flex bg-slate-200 rounded-lg p-1 mb-6 shrink-0">
@@ -372,27 +378,21 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                 <div className="flex justify-between items-center mb-2">
                                     <span className={`text-[10px] uppercase font-bold ${forceSuspend || isSkipWeek ? 'text-rose-400' : 'text-emerald-500'}`}>擬定輪值人員</span>
                                     <button onClick={()=>setIsEditingStaff(!isEditingStaff)} className="text-[10px] text-slate-400 hover:text-indigo-600 flex items-center gap-1">
-                                        <Edit3 size={10}/> {isEditingStaff ? '儲存並關閉' : '編輯名單'}
+                                        <Edit3 size={10}/> {isEditingStaff ? '儲存名單' : '編輯名單'}
                                     </button>
                                 </div>
                                 
                                 {isEditingStaff ? (
-                                    <div className="bg-white p-3 rounded-lg border border-slate-200 space-y-3 max-h-60 overflow-y-auto custom-scrollbar">
-                                        <div className="flex gap-2 sticky top-0 bg-white pb-2 border-b">
-                                            <input type="text" placeholder="姓名" value={newStaffName} onChange={e=>setNewStaffName(e.target.value)} className="flex-1 p-2 text-xs border rounded outline-none" />
-                                            <button onClick={handleAddStaff} className="p-2 bg-indigo-600 text-white rounded"><UserPlus size={16}/></button>
-                                        </div>
-                                        <div className="space-y-1">
-                                            {staffList.map((name, i) => (
-                                                <div key={i} className="flex items-center justify-between bg-slate-50 px-3 py-2 rounded border border-slate-200">
-                                                    <span className="text-[11px] font-bold text-slate-700">#{i+1} {name}</span>
-                                                    <div className="flex items-center gap-1">
-                                                        <button onClick={()=>moveStaff(i, 'up')} disabled={i===0} className="p-1 text-slate-400 hover:text-indigo-600 disabled:opacity-20"><ArrowUp size={12}/></button>
-                                                        <button onClick={()=>moveStaff(i, 'down')} disabled={i===staffList.length-1} className="p-1 text-slate-400 hover:text-indigo-600 disabled:opacity-20"><ArrowDown size={12}/></button>
-                                                    </div>
+                                    <div className="bg-white p-3 rounded-lg border border-slate-200 space-y-2 max-h-60 overflow-y-auto">
+                                        {staffList.map((name, i) => (
+                                            <div key={i} className="flex items-center justify-between bg-slate-50 px-3 py-1.5 rounded border">
+                                                <span className="text-xs font-bold text-slate-700">#{i+1} {name}</span>
+                                                <div className="flex items-center gap-1">
+                                                    <button onClick={()=>moveStaff(i, 'up')} disabled={i===0} className="p-1 text-slate-400 hover:text-indigo-600 disabled:opacity-20"><ArrowUp size={12}/></button>
+                                                    <button onClick={()=>moveStaff(i, 'down')} disabled={i===staffList.length-1} className="p-1 text-slate-400 hover:text-indigo-600 disabled:opacity-20"><ArrowDown size={12}/></button>
                                                 </div>
-                                            ))}
-                                        </div>
+                                            </div>
+                                        ))}
                                     </div>
                                 ) : (
                                     <div className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-2 py-2">
@@ -425,13 +425,13 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                         {isTriggering ? <RefreshCw className="animate-spin" size={20}/> : <SendHorizonal size={20}/>}
                         <div className="text-left">
                             <p className="text-sm">立即發送至 LINE 群組</p>
-                            <p className="text-[10px] opacity-60 font-normal">連線 API 並推播至選定群組</p>
+                            <p className="text-[10px] opacity-60 font-normal">直接呼叫 API 進行推播 (手動補發模式)</p>
                         </div>
                     </button>
                 </div>
             </div>
 
-            {/* Right Side Logs */}
+            {/* Right Side Logs (修復日誌無反應之關鍵區域) */}
             <div className="hidden md:flex flex-col md:w-1/3 bg-slate-900 overflow-hidden shrink-0">
                 <div className="flex-1 p-4 flex flex-col border-b border-slate-800 bg-slate-950/50">
                     <div className="flex items-center justify-between text-emerald-400 font-mono text-[10px] mb-2 uppercase tracking-widest">
@@ -463,7 +463,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                             <div className="text-emerald-400 text-[11px] mt-2 font-bold">輪值：{overridePerson || dutyPerson}</div>
                         </div>
                         <div className="pt-2 text-[9px] text-slate-600 border-t border-slate-800 mt-2 italic">
-                            💡 提示：若系統無反應，請優先切換「連線模式」。
+                            💡 提示：若目標群組沒收到，請確認 LINE Bot ID 與環境變數。
                         </div>
                     </div>
                 </div>
