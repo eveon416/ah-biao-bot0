@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Clock, UserCircle, Terminal, MessageSquare, ArrowRight, Server, Users, Plus, Trash2, Globe, Sparkles, CheckSquare, Square, Settings, RefreshCw, AlertCircle, ShieldAlert, Edit3, Sliders, UserPlus, Minus } from 'lucide-react';
+import { X, Clock, UserCircle, Terminal, MessageSquare, ArrowRight, Server, Users, Plus, Trash2, Globe, Sparkles, CheckSquare, Square, Settings, RefreshCw, AlertCircle, ShieldAlert, Edit3, Sliders, UserPlus, Minus, CalendarDays, ListOrdered, CalendarCheck } from 'lucide-react';
 
 interface ScheduleModalProps {
   isOpen: boolean;
@@ -14,6 +14,16 @@ interface Group {
   name: string;
   groupId: string; 
   isPreset?: boolean;
+}
+
+interface ScheduledTask {
+  id: string;
+  type: 'weekly' | 'suspend' | 'general';
+  targetDate: string; // YYYY-MM-DD
+  targetTime: string; // HH:mm
+  info: string;
+  targetGroupNames: string[];
+  createdAt: string;
 }
 
 const PRESET_GROUPS: Group[] = [
@@ -66,6 +76,11 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
   const [isAddingGroup, setIsAddingGroup] = useState(false);
   const [idError, setIdError] = useState('');
 
+  // Scheduling State
+  const [isScheduleMode, setIsScheduleMode] = useState(false);
+  const [scheduleTime, setScheduleTime] = useState('08:30');
+  const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
+
   // Connection State
   const [connectionMode, setConnectionMode] = useState<'remote' | 'local'>('remote');
   const [remoteUrl, setRemoteUrl] = useState(DEFAULT_REMOTE_URL); 
@@ -86,6 +101,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       setCustomReason(''); 
       setForceSuspend(false);
       setOverridePerson('');
+      setIsScheduleMode(false);
       
       // Load settings from localStorage
       const savedOffset = localStorage.getItem('roster_calibration_offset');
@@ -98,6 +114,11 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
           setStaffList(DEFAULT_STAFF_LIST);
       }
 
+      const savedTasks = localStorage.getItem('scheduled_tasks_v1');
+      if (savedTasks) {
+          try { setScheduledTasks(JSON.parse(savedTasks)); } catch(e) {}
+      }
+
       const hostname = window.location.hostname;
       if (hostname.includes('vercel.app')) {
           setConnectionMode('local');
@@ -105,9 +126,9 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
           setConnectionMode('remote');
       }
 
-      const saved = localStorage.getItem('line_groups_v1');
-      if (saved) {
-        try { setSavedGroups(JSON.parse(saved)); } catch (e) {}
+      const savedGroupsData = localStorage.getItem('line_groups_v1');
+      if (savedGroupsData) {
+        try { setSavedGroups(JSON.parse(savedGroupsData)); } catch (e) {}
       }
       
       const savedUrl = localStorage.getItem('remote_api_url');
@@ -156,7 +177,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       localStorage.setItem('roster_calibration_offset', newOffset.toString());
   };
 
-  // Logic to Set New Anchor based on Override Person
   const handleSetOverrideAsAnchor = () => {
       if (!overridePerson || !previewDate) return;
       if (!window.confirm(`確定要將「${overridePerson}」設為本週 (${previewDate}) 的起始點嗎？\n此操作將會重置整個輪值順序，未來將依此順序遞延。`)) return;
@@ -168,21 +188,16 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       const rawDiffTime = dateObj.getTime() - anchorDate.getTime();
       const rawWeeks = Math.floor(rawDiffTime / oneWeekMs);
 
-      // Formula: (AnchorIndex + rawWeeks + Offset) % L = TargetIndex
-      // Offset = TargetIndex - AnchorIndex - rawWeeks
       const targetIndex = staffList.indexOf(overridePerson);
       if (targetIndex === -1) return;
 
       let newOffset = (targetIndex - anchorIndex - rawWeeks) % staffList.length;
-      // Adjust negative modulo
       if (newOffset < 0) newOffset += staffList.length;
-      
-      // Make it closer to 0 (optional optimization to keep numbers small)
       if (newOffset > staffList.length / 2) newOffset -= staffList.length;
 
       setCalibrationOffset(newOffset);
       localStorage.setItem('roster_calibration_offset', newOffset.toString());
-      setOverridePerson(''); // Clear manual override since system now matches
+      setOverridePerson(''); 
       alert(`已重置順序！偏移量更新為: ${newOffset} 週`);
   };
 
@@ -249,7 +264,64 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       localStorage.setItem('line_groups_v1', JSON.stringify(updated));
   };
 
+  const handleAddToQueue = () => {
+    if (selectedGroupIds.length === 0) {
+        alert("請至少選擇一個發送目標群組");
+        return;
+    }
+
+    const isEffectiveSuspend = isSkipWeek || (forceSuspend && !overridePerson);
+    const isManualSuspendMode = activeTab === 'roster' && isEffectiveSuspend;
+    
+    let type: 'weekly' | 'suspend' | 'general' = 'weekly';
+    if (activeTab === 'general') type = 'general';
+    else if (isManualSuspendMode) type = 'suspend';
+    else type = 'weekly';
+
+    if (isManualSuspendMode && !customReason.trim()) {
+        alert('請輸入暫停原因 (例如：颱風停班停課)');
+        return;
+    }
+
+    const allGroups = [...PRESET_GROUPS, ...savedGroups];
+    const groupNames = selectedGroupIds.map(id => allGroups.find(g => g.groupId === id)?.name || id);
+
+    let infoText = "";
+    if (type === 'weekly') infoText = overridePerson || dutyPerson;
+    else if (type === 'suspend') infoText = customReason || "特殊事由";
+    else infoText = generalContent;
+
+    const newTask: ScheduledTask = {
+      id: Date.now().toString(),
+      type,
+      targetDate: previewDate,
+      targetTime: scheduleTime,
+      info: infoText,
+      targetGroupNames: groupNames,
+      createdAt: new Date().toISOString()
+    };
+
+    const updated = [...scheduledTasks, newTask];
+    setScheduledTasks(updated);
+    localStorage.setItem('scheduled_tasks_v1', JSON.stringify(updated));
+    addLog(`📅 已將任務加入預約佇列：${newTask.targetDate} ${newTask.targetTime}`);
+    setIsScheduleMode(false);
+  };
+
+  const handleDeleteTask = (taskId: string) => {
+    if (!window.confirm('確定刪除此預約任務？')) return;
+    const updated = scheduledTasks.filter(t => t.id !== taskId);
+    setScheduledTasks(updated);
+    localStorage.setItem('scheduled_tasks_v1', JSON.stringify(updated));
+    addLog(`🗑️ 已移除預約任務：${taskId.substring(0,6)}`);
+  };
+
   const handleTrigger = async () => {
+      if (isScheduleMode) {
+          handleAddToQueue();
+          return;
+      }
+
       if (selectedGroupIds.length === 0) {
           alert("請至少選擇一個發送目標群組");
           return;
@@ -299,17 +371,14 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       params.append('content', generalContent);
       params.append('groupId', selectedGroupIds.join(','));
       
-      // Pass the calibration offset
       if (calibrationOffset !== 0) {
           params.append('shift', calibrationOffset.toString());
       }
       
-      // Pass the override person
       if (type === 'weekly' && overridePerson) {
           params.append('person', overridePerson);
       }
 
-      // Pass the current staff list (Important for dynamic list)
       params.append('staffList', staffList.join(','));
 
       const fullUrl = `${targetUrl}?${params.toString()}`;
@@ -320,7 +389,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
           if (!res.ok) {
                let errorMsg = `HTTP ${res.status} ${res.statusText}`;
                if (res.status === 404) {
-                   errorMsg = `404 找不到路徑。請檢查: \n1. Vercel 專案網址是否正確 (${baseUrl})\n2. API 是否已部署`;
+                   errorMsg = `404 找不到路徑。請檢查網址或部署狀態`;
                }
                try {
                    const errJson = await res.json();
@@ -359,7 +428,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm transition-all">
-      <div className="bg-white w-full max-w-5xl rounded-xl shadow-2xl flex flex-col h-[85vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+      <div className="bg-white w-full max-w-6xl rounded-xl shadow-2xl flex flex-col h-[85vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         
         {/* Header */}
         <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white px-6 py-4 flex items-center justify-between shrink-0">
@@ -367,7 +436,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
             <Clock className="w-5 h-5 text-emerald-400" />
             <div>
                  <h2 className="text-lg font-bold tracking-wide official-font">排程廣播控制台</h2>
-                 <p className="text-[10px] text-slate-400 opacity-80">CRON JOB MANAGER</p>
+                 <p className="text-[10px] text-slate-400 opacity-80">CRON JOB MANAGER (ADVANCED)</p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white p-1 rounded-full transition-colors"><X size={20} /></button>
@@ -377,10 +446,10 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
         <div className="flex flex-1 overflow-hidden">
             
             {/* Left Panel: Settings & Input */}
-            <div className="w-full md:w-2/3 flex flex-col bg-slate-50 border-r border-slate-200">
+            <div className="w-full md:w-[60%] flex flex-col bg-slate-50 border-r border-slate-200">
                 <div className="flex-1 overflow-y-auto p-6">
                     
-                    {/* Connection Config Toggle */}
+                    {/* Connection Config */}
                     <div className="mb-6 bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
                          <div className="flex items-center justify-between">
                              <div className="flex items-center gap-2">
@@ -388,37 +457,15 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                 <span className="text-xs font-bold text-slate-700">API 連線設定</span>
                              </div>
                              <div className="flex bg-slate-100 rounded p-1">
-                                 <button 
-                                     onClick={() => setConnectionMode('local')}
-                                     className={`px-3 py-1 rounded text-[10px] font-bold transition-all ${connectionMode === 'local' ? 'bg-white shadow text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
-                                 >
-                                     同源 (Local)
-                                 </button>
-                                 <button 
-                                     onClick={() => setConnectionMode('remote')}
-                                     className={`px-3 py-1 rounded text-[10px] font-bold transition-all ${connectionMode === 'remote' ? 'bg-white shadow text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}
-                                 >
-                                     雲端 (Remote)
-                                 </button>
+                                 <button onClick={() => setConnectionMode('local')} className={`px-3 py-1 rounded text-[10px] font-bold transition-all ${connectionMode === 'local' ? 'bg-white shadow text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}>同源</button>
+                                 <button onClick={() => setConnectionMode('remote')} className={`px-3 py-1 rounded text-[10px] font-bold transition-all ${connectionMode === 'remote' ? 'bg-white shadow text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}>雲端</button>
                              </div>
                          </div>
-                         
                          {connectionMode === 'remote' && (
-                             <div className="mt-3 animate-in fade-in slide-in-from-top-1">
+                             <div className="mt-3">
                                  <div className="flex gap-2">
-                                     <input 
-                                         type="text" 
-                                         value={remoteUrl} 
-                                         onChange={e => setRemoteUrl(e.target.value)}
-                                         className="flex-1 px-3 py-1.5 text-xs border rounded bg-slate-50 text-slate-900 font-mono"
-                                         placeholder="https://your-project.vercel.app"
-                                     />
-                                     <button 
-                                         onClick={() => { localStorage.setItem('remote_api_url', remoteUrl); alert('已儲存'); }}
-                                         className="bg-slate-200 text-slate-600 px-3 py-1.5 rounded text-xs hover:bg-slate-300"
-                                     >
-                                         儲存
-                                     </button>
+                                     <input type="text" value={remoteUrl} onChange={e => setRemoteUrl(e.target.value)} className="flex-1 px-3 py-1.5 text-xs border rounded bg-slate-50 text-slate-900 font-mono" placeholder="Vercel App URL"/>
+                                     <button onClick={() => { localStorage.setItem('remote_api_url', remoteUrl); alert('已儲存'); }} className="bg-slate-200 text-slate-600 px-3 py-1.5 rounded text-xs">儲存</button>
                                  </div>
                              </div>
                          )}
@@ -427,50 +474,29 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                     {/* Target Groups */}
                     <div className="mb-6">
                         <div className="flex items-center justify-between mb-2">
-                            <label className="text-sm font-bold text-slate-700 flex items-center gap-1">
-                                <Users size={14} /> 發送目標群組
-                            </label>
-                            {!isAddingGroup && (
-                                <button onClick={() => setIsAddingGroup(true)} className="text-xs flex items-center gap-1 text-indigo-600 hover:text-indigo-800">
-                                    <Plus size={12} /> 新增
-                                </button>
-                            )}
+                            <label className="text-sm font-bold text-slate-700 flex items-center gap-1"><Users size={14} /> 發送目標群組</label>
+                            {!isAddingGroup && <button onClick={() => setIsAddingGroup(true)} className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1"><Plus size={12} /> 新增</button>}
                         </div>
-                        
                         {isAddingGroup && (
-                            <div className="bg-white p-3 rounded border border-indigo-100 shadow-sm mb-3">
-                                <div className="space-y-2">
-                                    <input type="text" placeholder="群組名稱" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} className="w-full px-2 py-1.5 text-xs border rounded"/>
-                                    <input type="text" placeholder="Line Group ID (U... or C...)" value={newGroupId} onChange={e => setNewGroupId(e.target.value)} className="w-full px-2 py-1.5 text-xs border rounded font-mono"/>
-                                    {idError && <p className="text-[10px] text-red-500">{idError}</p>}
-                                    <div className="flex gap-2 justify-end">
-                                        <button onClick={() => setIsAddingGroup(false)} className="px-2 py-1 text-xs text-slate-500">取消</button>
-                                        <button onClick={handleSaveGroup} className="px-2 py-1 text-xs bg-indigo-600 text-white rounded">儲存</button>
-                                    </div>
+                            <div className="bg-white p-3 rounded border border-indigo-100 shadow-sm mb-3 space-y-2">
+                                <input type="text" placeholder="群組名稱" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} className="w-full px-2 py-1.5 text-xs border rounded"/>
+                                <input type="text" placeholder="Line Group ID" value={newGroupId} onChange={e => setNewGroupId(e.target.value)} className="w-full px-2 py-1.5 text-xs border rounded font-mono"/>
+                                <div className="flex gap-2 justify-end">
+                                    <button onClick={() => setIsAddingGroup(false)} className="px-2 py-1 text-xs text-slate-500">取消</button>
+                                    <button onClick={handleSaveGroup} className="px-2 py-1 text-xs bg-indigo-600 text-white rounded">儲存</button>
                                 </div>
                             </div>
                         )}
-
-                        <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
+                        <div className="space-y-1.5 max-h-32 overflow-y-auto">
                             {[...PRESET_GROUPS, ...savedGroups].map(group => {
                                 const isSelected = selectedGroupIds.includes(group.groupId);
                                 return (
-                                    <div key={group.id} 
-                                         onClick={() => toggleGroupSelection(group.groupId)}
-                                         className={`flex items-center justify-between p-2 rounded border cursor-pointer transition-all select-none
-                                         ${isSelected ? 'bg-indigo-50 border-indigo-300 text-indigo-900' : 'bg-white border-slate-200 text-slate-500'}`}>
+                                    <div key={group.id} onClick={() => toggleGroupSelection(group.groupId)} className={`flex items-center justify-between p-2 rounded border cursor-pointer transition-all ${isSelected ? 'bg-indigo-50 border-indigo-300 text-indigo-900' : 'bg-white border-slate-200 text-slate-500'}`}>
                                         <div className="flex items-center gap-2">
                                             {isSelected ? <CheckSquare size={14} className="text-indigo-600"/> : <Square size={14} />}
                                             <span className="text-xs font-medium">{group.name}</span>
                                         </div>
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-[10px] font-mono opacity-50">{group.groupId.substring(0, 4)}...</span>
-                                            {!group.isPreset && (
-                                                <button onClick={(e) => { e.stopPropagation(); handleDeleteGroup(group.id); }} className="text-slate-300 hover:text-red-500 p-1">
-                                                    <Trash2 size={12} />
-                                                </button>
-                                            )}
-                                        </div>
+                                        <span className="text-[10px] font-mono opacity-50">{group.groupId.substring(0, 4)}...</span>
                                     </div>
                                 );
                             })}
@@ -479,237 +505,150 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
 
                     {/* Tabs */}
                     <div className="flex bg-slate-200 rounded-lg p-1 mb-4">
-                        <button 
-                            onClick={() => setActiveTab('roster')}
-                            className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-md text-xs font-bold transition-all
-                            ${activeTab === 'roster' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                        >
-                            <UserCircle size={14} /> 科務會議輪值
-                        </button>
-                        <button 
-                             onClick={() => setActiveTab('general')}
-                             className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-md text-xs font-bold transition-all
-                             ${activeTab === 'general' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                        >
-                            <MessageSquare size={14} /> 一般公告
-                        </button>
+                        <button onClick={() => setActiveTab('roster')} className={`flex-1 py-2 rounded-md text-xs font-bold flex items-center justify-center gap-2 ${activeTab === 'roster' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}><UserCircle size={14} /> 科務會議輪值</button>
+                        <button onClick={() => setActiveTab('general')} className={`flex-1 py-2 rounded-md text-xs font-bold flex items-center justify-center gap-2 ${activeTab === 'general' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}><MessageSquare size={14} /> 一般公告</button>
                     </div>
 
-                    {/* Content Input */}
-                    <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm min-h-[200px]">
+                    {/* Content Area */}
+                    <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
                         {activeTab === 'roster' ? (
                             <div className="space-y-4">
                                 <div className="flex flex-col gap-1">
-                                    <label className="text-xs font-bold text-slate-500">預定發送日期</label>
-                                    <input type="date" value={previewDate} onChange={e => setPreviewDate(e.target.value)} className="w-full px-3 py-2 text-sm border rounded bg-white text-slate-900"/>
+                                    <label className="text-xs font-bold text-slate-500">日期</label>
+                                    <input type="date" value={previewDate} onChange={e => setPreviewDate(e.target.value)} className="w-full px-3 py-2 text-sm border rounded"/>
                                 </div>
-                                <div className={`p-3 rounded border transition-colors ${forceSuspend || isSkipWeek ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
-                                    <div className="flex justify-between items-center mb-1">
-                                        <span className={`text-xs ${forceSuspend || isSkipWeek ? 'text-red-700 font-bold' : 'text-slate-500'}`}>
-                                            系統推算輪值人員
-                                        </span>
-                                        {isSkipWeek && <span className="text-[10px] bg-red-200 text-red-800 px-1.5 py-0.5 rounded font-bold">系統內建暫停</span>}
-                                        {overridePerson && <span className="text-[10px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded font-bold">手動指定</span>}
-                                    </div>
-                                    <div className={`font-bold text-lg ${forceSuspend || isSkipWeek ? (overridePerson ? 'text-indigo-700' : 'text-red-600') : 'text-slate-800'}`}>
-                                        {overridePerson ? overridePerson : dutyPerson}
-                                    </div>
-                                    
-                                    {/* 人員指定下拉選單與重置順序 */}
-                                    <div className="mt-2 pt-2 border-t border-dashed border-slate-200">
-                                         <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 mb-1">
-                                             <Edit3 size={10} /> 
-                                             單次指定人員 (Manual Override)
-                                         </label>
-                                         <div className="flex gap-2">
-                                             <select 
-                                                 value={overridePerson}
-                                                 onChange={e => {
-                                                     setOverridePerson(e.target.value);
-                                                     if(e.target.value) setForceSuspend(false); 
-                                                 }}
-                                                 className="flex-1 px-2 py-1.5 text-xs border border-slate-300 rounded bg-white text-slate-700 outline-none focus:border-indigo-500"
-                                             >
-                                                 <option value="">-- 使用系統推算 (Default) --</option>
-                                                 {staffList.map(p => (
-                                                     <option key={p} value={p}>{p}</option>
-                                                 ))}
-                                             </select>
-                                             {overridePerson && (
-                                                <button
-                                                    onClick={handleSetOverrideAsAnchor}
-                                                    className="px-2 py-1.5 bg-indigo-600 text-white text-[10px] rounded hover:bg-indigo-700 whitespace-nowrap"
-                                                    title="未來將從此人員的下一位繼續"
-                                                >
-                                                    以此人重置順序
-                                                </button>
-                                             )}
-                                         </div>
-                                    </div>
-                                    
-                                    {/* 輪值校正 (Calibration) */}
-                                    <div className="mt-2 pt-2 border-t border-dashed border-slate-200">
-                                         <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 mb-1">
-                                             <Sliders size={10} /> 
-                                             輪值順序校正 (Global Calibration)
-                                         </label>
-                                         <div className="flex items-center justify-between">
-                                             <div className="flex items-center gap-2">
-                                                 <button 
-                                                     onClick={() => handleCalibrationChange(-1)}
-                                                     className="px-2 py-1 bg-slate-100 rounded text-xs hover:bg-slate-200 flex items-center gap-1"
-                                                     title="颱風順延/補輪值 (Shift Back)"
-                                                 ><Minus size={10}/>順延(颱風)</button>
-                                                 <span className={`text-xs font-mono font-bold w-8 text-center ${calibrationOffset !== 0 ? 'text-blue-600' : 'text-slate-400'}`}>
-                                                     {calibrationOffset > 0 ? '+' : ''}{calibrationOffset}
-                                                 </span>
-                                                 <button 
-                                                     onClick={() => handleCalibrationChange(1)}
-                                                     className="px-2 py-1 bg-slate-100 rounded text-xs hover:bg-slate-200 flex items-center gap-1"
-                                                     title="跳過一週 (Skip)"
-                                                 ><Plus size={10}/>跳過</button>
-                                             </div>
-                                             
-                                             <button 
-                                                 onClick={() => setIsManageStaffOpen(!isManageStaffOpen)}
-                                                 className="text-[10px] text-slate-400 hover:text-indigo-600 flex items-center gap-1 underline"
-                                             >
-                                                 <UserPlus size={10} />
-                                                 {isManageStaffOpen ? '關閉人員管理' : '管理人員名單'}
-                                             </button>
-                                         </div>
-                                    </div>
-
-                                    {/* 人員管理 (展開區塊) */}
-                                    {isManageStaffOpen && (
-                                        <div className="mt-2 p-3 bg-slate-100 rounded border border-slate-200 animate-in fade-in slide-in-from-top-2">
-                                            <label className="block text-[10px] font-bold text-slate-500 mb-2">輪值人員名單 (拖曳功能暫未開放)</label>
-                                            <div className="flex flex-wrap gap-2 mb-3">
-                                                {staffList.map((staff, idx) => (
-                                                    <div key={idx} className="bg-white px-2 py-1 rounded border border-slate-300 text-xs flex items-center gap-1 shadow-sm">
-                                                        {staff}
-                                                        <button onClick={() => handleDeleteStaff(idx)} className="text-slate-400 hover:text-red-500"><X size={10}/></button>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                            <div className="flex gap-2">
-                                                <input 
-                                                    type="text" 
-                                                    value={newStaffName} 
-                                                    onChange={e => setNewStaffName(e.target.value)}
-                                                    placeholder="新增人員姓名"
-                                                    className="flex-1 px-2 py-1 text-xs border rounded"
-                                                />
-                                                <button onClick={handleAddStaff} className="bg-indigo-600 text-white px-3 py-1 text-xs rounded hover:bg-indigo-700">新增</button>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                </div>
-                                
-                                {/* 突發暫停開關 */}
-                                <div 
-                                    className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-all
-                                    ${overridePerson 
-                                        ? 'bg-slate-50 border-slate-100 opacity-50 cursor-not-allowed' 
-                                        : 'bg-orange-50 border-orange-100 hover:bg-orange-100'}`} 
-                                    onClick={() => {
-                                        if (overridePerson) return;
-                                        if (!isSkipWeek) setForceSuspend(!forceSuspend);
-                                    }}
-                                >
-                                    <div className={`w-4 h-4 rounded border flex items-center justify-center bg-white ${forceSuspend && !overridePerson ? 'border-orange-500' : 'border-slate-300'}`}>
-                                         {forceSuspend && !overridePerson && <div className="w-2.5 h-2.5 bg-orange-500 rounded-sm"></div>}
-                                    </div>
-                                    <div className="flex-1">
-                                        <div className="text-xs font-bold text-orange-800 flex items-center gap-1">
-                                            <ShieldAlert size={12}/> 
-                                            突發狀況 (強制暫停)
-                                        </div>
-                                        <div className="text-[10px] text-orange-600 opacity-80">
-                                            {overridePerson ? '已手動指定人員，無法暫停。' : '將發送「紅色暫停卡片」而非一般輪值卡。'}
-                                        </div>
+                                <div className={`p-3 rounded border ${forceSuspend || isSkipWeek ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+                                    <div className="text-[10px] font-bold text-slate-400 mb-1">推算輪值</div>
+                                    <div className="font-bold text-lg text-slate-800">{overridePerson || dutyPerson}</div>
+                                    <div className="mt-2 flex gap-2">
+                                        <select value={overridePerson} onChange={e => {setOverridePerson(e.target.value); if(e.target.value) setForceSuspend(false);}} className="flex-1 px-2 py-1.5 text-xs border rounded">
+                                            <option value="">-- 使用推算 --</option>
+                                            {staffList.map(p => <option key={p} value={p}>{p}</option>)}
+                                        </select>
                                     </div>
                                 </div>
-
-                                <div className="flex flex-col gap-1">
-                                    <label className="text-xs font-bold text-slate-500">
-                                        {(isSkipWeek || (forceSuspend && !overridePerson)) ? '暫停原因 (必填)' : '特殊備註 (選填)'}
-                                    </label>
-                                    <input 
-                                        type="text" 
-                                        placeholder={(isSkipWeek || (forceSuspend && !overridePerson)) ? "請輸入原因 (例：凱米颱風停班停課)..." : "例：如遇颱風順延..."} 
-                                        value={customReason} 
-                                        onChange={e => setCustomReason(e.target.value)} 
-                                        className={`w-full px-3 py-2 text-sm border rounded bg-white text-slate-900 ${(isSkipWeek || (forceSuspend && !overridePerson)) && !customReason ? 'border-red-300 focus:border-red-500' : ''}`}
-                                    />
+                                <div className="flex items-center gap-2 p-2 rounded-lg border border-orange-100 bg-orange-50 cursor-pointer" onClick={() => !overridePerson && !isSkipWeek && setForceSuspend(!forceSuspend)}>
+                                    <div className={`w-4 h-4 rounded border bg-white flex items-center justify-center ${forceSuspend ? 'border-orange-500' : 'border-slate-300'}`}>
+                                        {forceSuspend && <div className="w-2.5 h-2.5 bg-orange-500 rounded-sm"></div>}
+                                    </div>
+                                    <span className="text-xs font-bold text-orange-800">突發強制暫停</span>
                                 </div>
+                                <input type="text" placeholder="原因/備註" value={customReason} onChange={e => setCustomReason(e.target.value)} className="w-full px-3 py-2 text-sm border rounded"/>
                             </div>
                         ) : (
-                            <div className="space-y-3 h-full flex flex-col">
-                                <div className="flex justify-between items-center">
-                                    <label className="text-xs font-bold text-slate-500">公告內容</label>
-                                    {onRequestRefine && generalContent && (
-                                        <button onClick={() => onRequestRefine(generalContent)} className="text-[10px] flex items-center gap-1 text-indigo-600 hover:bg-indigo-50 px-2 py-1 rounded transition-colors">
-                                            <Sparkles size={10} /> AI 潤飾
-                                        </button>
-                                    )}
-                                </div>
-                                <textarea 
-                                    value={generalContent}
-                                    onChange={e => setGeneralContent(e.target.value)}
-                                    placeholder="請輸入公告內容..."
-                                    className="w-full flex-1 min-h-[120px] px-3 py-2 text-sm border rounded resize-none bg-white text-slate-900 focus:border-indigo-500 outline-none"
-                                />
+                            <div className="space-y-3">
+                                <textarea value={generalContent} onChange={e => setGeneralContent(e.target.value)} placeholder="公告內容..." className="w-full min-h-[120px] px-3 py-2 text-sm border rounded resize-none outline-none"/>
                             </div>
                         )}
                     </div>
                 </div>
 
-                <div className="p-6 border-t border-slate-200 bg-white">
+                {/* Footer Controls */}
+                <div className="p-6 border-t border-slate-200 bg-white space-y-4">
+                    <div className="flex items-center justify-between p-3 bg-indigo-50 rounded-lg border border-indigo-100">
+                        <div className="flex items-center gap-2">
+                            <CalendarDays className="w-5 h-5 text-indigo-600" />
+                            <div>
+                                <div className="text-xs font-bold text-indigo-900">預約發送模式</div>
+                                <div className="text-[10px] text-indigo-600">將任務存入本機排程佇列中</div>
+                            </div>
+                        </div>
+                        <button onClick={() => setIsScheduleMode(!isScheduleMode)} className={`w-12 h-6 rounded-full transition-all relative ${isScheduleMode ? 'bg-indigo-600' : 'bg-slate-300'}`}>
+                            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isScheduleMode ? 'left-7' : 'left-1'}`}></div>
+                        </button>
+                    </div>
+
+                    {isScheduleMode && (
+                        <div className="p-3 bg-white border border-indigo-200 rounded-lg flex items-center gap-4 animate-in fade-in slide-in-from-bottom-2">
+                             <div className="flex-1">
+                                 <label className="text-[10px] font-bold text-slate-500 block mb-1">預約發送時間</label>
+                                 <input type="time" value={scheduleTime} onChange={e => setScheduleTime(e.target.value)} className="w-full px-2 py-1.5 border rounded text-sm"/>
+                             </div>
+                             <div className="flex-1">
+                                 <label className="text-[10px] font-bold text-slate-500 block mb-1">預約發送日期</label>
+                                 <div className="text-xs font-bold text-slate-800 py-1.5">{previewDate}</div>
+                             </div>
+                        </div>
+                    )}
+
                     <button 
                         onClick={handleTrigger}
                         disabled={isTriggering || (activeTab === 'general' && !generalContent.trim())}
                         className={`w-full py-3.5 rounded-lg font-bold flex items-center justify-center gap-2 shadow-lg transition-all
-                        ${isTriggering 
-                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
-                            : 'bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95'}`}
+                        ${isTriggering ? 'bg-slate-100 text-slate-400' : (isScheduleMode ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white')}`}
                     >
-                         {isTriggering ? <RefreshCw size={18} className="animate-spin" /> : <ArrowRight size={18} />}
-                         {isTriggering ? '發送中 (Transmitting)...' : '確認發送廣播 (Execute)'}
+                         {isTriggering ? <RefreshCw size={18} className="animate-spin" /> : (isScheduleMode ? <CalendarCheck size={18} /> : <ArrowRight size={18} />)}
+                         {isTriggering ? '執行中...' : (isScheduleMode ? '加入預約排程佇列' : '確認發送廣播 (立刻)' )}
                     </button>
                 </div>
             </div>
 
-            {/* Right Panel: Classic Console (Black, Full Height, No Header) */}
-            <div className="hidden md:flex flex-col md:w-1/3 bg-black text-emerald-500 font-mono text-xs z-10 border-l border-slate-700">
-                <div className="p-2 bg-gray-900 border-b border-gray-800 text-gray-500 text-[10px] flex justify-between">
-                    <span>TERMINAL OUT</span>
-                    <span className={connectionMode === 'remote' ? 'text-orange-400' : 'text-blue-400'}>
-                         MODE: {connectionMode.toUpperCase()}
-                    </span>
-                </div>
-                <div className="flex-1 p-4 overflow-y-auto space-y-1.5 scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent font-medium">
-                    {logs.length === 0 && (
-                        <div className="h-full flex flex-col items-center justify-center opacity-30 gap-3 text-gray-500">
-                            <Terminal size={32} />
-                            <p className="text-sm">Awaiting Command...</p>
-                            <div className="text-[10px] text-center max-w-[200px] border border-gray-700 p-2 rounded">
-                                Target:<br/>
-                                {connectionMode === 'remote' ? remoteUrl : '[Localhost/Relative]'}
+            {/* Right Panel: Split Console */}
+            <div className="hidden md:flex flex-col md:w-[40%] bg-black font-mono text-xs z-10 border-l border-slate-700">
+                
+                {/* Upper: Terminal Logs */}
+                <div className="h-1/2 flex flex-col border-b border-slate-800 overflow-hidden">
+                    <div className="p-2 bg-slate-900 border-b border-gray-800 text-emerald-500 text-[10px] flex justify-between shrink-0">
+                        <span className="flex items-center gap-1"><Terminal size={10}/> TERMINAL OUT</span>
+                        <span className="opacity-50">{connectionMode.toUpperCase()}</span>
+                    </div>
+                    <div className="flex-1 p-3 overflow-y-auto space-y-1 text-emerald-500/90">
+                        {logs.length === 0 && <div className="text-gray-700 opacity-30 text-center mt-10 italic">Awaiting actions...</div>}
+                        {logs.map((log, idx) => (
+                            <div key={idx} className={`flex gap-2 ${log.success === false ? 'text-red-500' : (log.success === true ? 'text-emerald-400' : 'text-gray-300')}`}>
+                                <span className="opacity-40">[{log.time}]</span>
+                                <span className="break-all">{log.msg}</span>
                             </div>
-                        </div>
-                    )}
-                    {logs.map((log, idx) => (
-                        <div key={idx} className={`flex gap-2 leading-relaxed ${log.success === false ? 'text-red-500' : (log.success === true ? 'text-emerald-400' : 'text-gray-300')}`}>
-                            <span className="opacity-50 shrink-0">[{log.time}]</span>
-                            <span className="break-all whitespace-pre-wrap">{log.msg}</span>
-                        </div>
-                    ))}
-                    <div ref={logsEndRef} />
+                        ))}
+                        <div ref={logsEndRef} />
+                    </div>
                 </div>
-            </div>
 
+                {/* Lower: Pending Scheduled Tasks */}
+                <div className="h-1/2 flex flex-col overflow-hidden bg-slate-950">
+                    <div className="p-2 bg-slate-900 border-b border-slate-800 text-amber-500 text-[10px] flex justify-between shrink-0">
+                        <span className="flex items-center gap-1"><ListOrdered size={10}/> PENDING SCHEDULES (預排佇列)</span>
+                        <span className="text-slate-500">{scheduledTasks.length} Tasks</span>
+                    </div>
+                    <div className="flex-1 p-3 overflow-y-auto space-y-3">
+                        {scheduledTasks.length === 0 && (
+                            <div className="h-full flex flex-col items-center justify-center opacity-20 text-slate-500 text-center p-4">
+                                <CalendarDays size={32} className="mb-2"/>
+                                <p>目前無預約排程</p>
+                            </div>
+                        )}
+                        {scheduledTasks.map((task) => (
+                            <div key={task.id} className="bg-slate-900 border border-slate-800 rounded p-2.5 relative group hover:border-amber-900/50 transition-colors">
+                                <div className="flex items-center justify-between mb-1.5">
+                                    <div className="flex items-center gap-2">
+                                        <span className={`px-1.5 py-0.5 rounded-[3px] text-[8px] font-bold uppercase ${
+                                            task.type === 'weekly' ? 'bg-indigo-900 text-indigo-300' : 
+                                            task.type === 'suspend' ? 'bg-red-900 text-red-300' : 'bg-emerald-900 text-emerald-300'
+                                        }`}>
+                                            {task.type}
+                                        </span>
+                                        <span className="text-amber-500 font-bold text-[10px] flex items-center gap-1">
+                                            <Clock size={10}/> {task.targetDate} {task.targetTime}
+                                        </span>
+                                    </div>
+                                    <button onClick={() => handleDeleteTask(task.id)} className="text-slate-600 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100">
+                                        <Trash2 size={12}/>
+                                    </button>
+                                </div>
+                                <div className="text-slate-300 text-[11px] font-medium border-l-2 border-slate-700 pl-2 mb-2 line-clamp-2">
+                                    {task.info}
+                                </div>
+                                <div className="flex flex-wrap gap-1">
+                                    {task.targetGroupNames.map((g, i) => (
+                                        <span key={i} className="text-[8px] bg-slate-800 text-slate-500 px-1 py-0.5 rounded">@{g}</span>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+            </div>
         </div>
       </div>
     </div>
