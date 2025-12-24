@@ -169,20 +169,14 @@ const ReferenceFilesModal: React.FC<ReferenceFilesModalProps> = ({ isOpen, onClo
         </div>
 
         <div className="p-6 overflow-y-auto bg-slate-100 flex-1">
-          
           <div className="mb-6 flex items-start gap-3 bg-amber-50 border border-amber-200 p-3 rounded-lg text-xs text-amber-800">
             <AlertCircle className="w-5 h-5 shrink-0 text-amber-600 mt-0.5" />
-            <p>
-              下列共計 <strong>{totalFilesCount}</strong> 份法規與文件已納入記憶。系統將<strong>優先引用</strong>內部文件。
-            </p>
+            <p>下列共計 <strong>{totalFilesCount}</strong> 份法規與文件已納入記憶。系統將<strong>優先引用</strong>內部文件。</p>
           </div>
 
           <div className="mb-8">
               {!isAdding ? (
-                 <button 
-                    onClick={() => setIsAdding(true)}
-                    className="w-full py-3 border-2 border-dashed border-indigo-300 rounded-lg text-indigo-700 font-bold text-sm hover:bg-white transition-all flex items-center justify-center gap-2"
-                 >
+                 <button onClick={() => setIsAdding(true)} className="w-full py-3 border-2 border-dashed border-indigo-300 rounded-lg text-indigo-700 font-bold text-sm hover:bg-white transition-all flex items-center justify-center gap-2">
                     <Plus size={16} /> 新增機關文件或函釋 (錄入庫)
                  </button>
               ) : (
@@ -191,73 +185,42 @@ const ReferenceFilesModal: React.FC<ReferenceFilesModalProps> = ({ isOpen, onClo
                         <h3 className="font-bold text-emerald-400 text-sm flex items-center gap-2">
                             <Upload size={14}/> 錄入新資料
                         </h3>
-                        <button onClick={() => setIsAdding(false)} className="text-slate-500 hover:text-white"><X size={16}/></button>
+                        <button onClick={() => setIsAdding(false)} className="text-slate-400 hover:text-white"><X size={16}/></button>
                     </div>
                     
                     <div className="space-y-4">
                         <div className="flex items-center gap-3">
                              <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" />
-                             <button 
-                                onClick={() => fileInputRef.current?.click()}
-                                className="flex items-center gap-2 px-4 py-2 bg-slate-800 border border-slate-700 rounded text-xs text-emerald-400 hover:bg-slate-700 transition-colors"
-                             >
-                                <Upload size={14} /> 選擇檔案附件 (Optional)
+                             <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-4 py-2 bg-slate-800 border border-slate-700 rounded text-xs text-emerald-400 hover:bg-slate-700 transition-colors">
+                                <Upload size={14} /> 選擇檔案附件
                              </button>
-                             {selectedFileName && (
-                                 <div className="flex items-center gap-1.5 text-emerald-400 text-xs font-mono">
-                                    <FileCheck size={14} /> {selectedFileName}
-                                 </div>
-                             )}
+                             {selectedFileName && <div className="text-emerald-400 text-xs font-mono">{selectedFileName}</div>}
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div className="space-y-1">
-                                <label className="text-[10px] uppercase font-bold text-slate-500 ml-1">文件標題</label>
-                                <input 
-                                    type="text" 
-                                    placeholder="例: 114年度出納作業規範" 
-                                    value={newTitle}
-                                    onChange={e => setNewTitle(e.target.value)}
-                                    className="w-full px-3 py-2 text-sm bg-black text-white border border-slate-800 rounded focus:border-emerald-500 outline-none"
-                                />
+                                <label className="text-[10px] uppercase font-bold text-slate-300 ml-1">文件標題</label>
+                                <input type="text" placeholder="例: 114年度出納作業規範" value={newTitle} onChange={e => setNewTitle(e.target.value)} className="w-full px-3 py-2 text-sm bg-black text-white border border-slate-800 rounded focus:border-emerald-500 outline-none"/>
                             </div>
                             <div className="space-y-1">
-                                <label className="text-[10px] uppercase font-bold text-slate-500 ml-1">分類歸檔</label>
-                                <select 
-                                    value={newCategory}
-                                    onChange={e => setNewCategory(e.target.value)}
-                                    className="w-full px-3 py-2 text-sm bg-black text-white border border-slate-800 rounded focus:border-emerald-500 outline-none"
-                                >
+                                <label className="text-[10px] uppercase font-bold text-slate-300 ml-1">分類歸檔</label>
+                                <select value={newCategory} onChange={e => setNewCategory(e.target.value)} className="w-full px-3 py-2 text-sm bg-black text-white border border-slate-800 rounded focus:border-emerald-500 outline-none">
                                     {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
                             </div>
                         </div>
 
                         <div className="space-y-1">
-                             <label className="text-[10px] uppercase font-bold text-slate-500 ml-1">版本日期</label>
-                             <input 
-                                type="text" 
-                                placeholder="例: 114.12.30" 
-                                value={newDate}
-                                onChange={e => setNewDate(e.target.value)}
-                                className="w-full px-3 py-2 text-sm bg-black text-white border border-slate-800 rounded focus:border-emerald-500 outline-none"
-                            />
+                            <label className="text-[10px] uppercase font-bold text-slate-300 ml-1">版本日期</label>
+                            <input type="text" placeholder="例: 114.12.30" value={newDate} onChange={e => setNewDate(e.target.value)} className="w-full px-3 py-2 text-sm bg-black text-white border border-slate-800 rounded focus:border-emerald-500 outline-none"/>
                         </div>
 
                         <div className="space-y-1">
-                            <label className="text-[10px] uppercase font-bold text-slate-500 ml-1">規範內容或重點摘要</label>
-                            <textarea 
-                                placeholder="請輸入文件核心要點..." 
-                                value={newDesc}
-                                onChange={e => setNewDesc(e.target.value)}
-                                className="w-full px-3 py-2 text-sm bg-black text-white border border-slate-800 rounded focus:border-emerald-500 outline-none min-h-[100px] resize-none"
-                            />
+                            <label className="text-[10px] uppercase font-bold text-slate-300 ml-1">規範內容或重點摘要</label>
+                            <textarea placeholder="請輸入文件核心要點..." value={newDesc} onChange={e => setNewDesc(e.target.value)} className="w-full px-3 py-2 text-sm bg-black text-white border border-slate-800 rounded focus:border-emerald-500 outline-none min-h-[100px] resize-none"/>
                         </div>
 
-                        <button 
-                            onClick={handleSaveCustomDoc}
-                            className="w-full bg-emerald-600 text-white py-3 rounded-lg font-bold hover:bg-emerald-500 shadow-lg transition-all active:scale-95"
-                        >
+                        <button onClick={handleSaveCustomDoc} className="w-full bg-emerald-600 text-white py-3 rounded-lg font-bold hover:bg-emerald-500 shadow-lg transition-all active:scale-95">
                             <Save size={18} /> 確認寫入系統核心
                         </button>
                     </div>
@@ -268,37 +231,24 @@ const ReferenceFilesModal: React.FC<ReferenceFilesModalProps> = ({ isOpen, onClo
           <div className="space-y-8">
             {mergedGroups.map((group, groupIndex) => (
               <div key={groupIndex}>
-                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 ml-1 flex items-center gap-2">
-                  <FolderOpen size={14} /> {group.category}
-                </h3>
+                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 ml-1 flex items-center gap-2"><FolderOpen size={14} /> {group.category}</h3>
                 <div className="grid grid-cols-1 gap-4">
                   {group.files.map((file: any, index: number) => (
-                    <div key={index} className={`bg-white p-4 rounded-xl border shadow-sm flex flex-col sm:flex-row gap-4 transition-all group relative
-                        ${file.isCustom ? 'border-indigo-200 bg-indigo-50/40' : 'border-slate-200 hover:border-indigo-400'}`}>
-                      
-                      <div className={`shrink-0 flex items-center justify-center w-12 h-12 rounded-xl transition-colors
-                          ${file.isCustom ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-400 group-hover:bg-indigo-50 group-hover:text-indigo-600'}`}>
+                    <div key={index} className={`bg-white p-4 rounded-xl border shadow-sm flex flex-col sm:flex-row gap-4 transition-all group relative ${file.isCustom ? 'border-indigo-200 bg-indigo-50/40' : 'border-slate-200 hover:border-indigo-400'}`}>
+                      <div className={`shrink-0 flex items-center justify-center w-12 h-12 rounded-xl transition-colors ${file.isCustom ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-400 group-hover:bg-indigo-50 group-hover:text-indigo-600'}`}>
                         <FileText size={24} />
                       </div>
-                      
                       <div className="flex-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-2 mb-1.5">
                           <h4 className="font-bold text-slate-900 text-sm truncate pr-2 official-font">{file.title}</h4>
-                          {file.highlight && (
-                             <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-100 text-rose-700 border border-rose-200 flex items-center gap-1">最新</span>
-                          )}
+                          {file.highlight && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-100 text-rose-700 border border-rose-200">最新</span>}
                           {file.isCustom && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-600 text-white">自訂</span>}
                         </div>
                         <p className="text-xs text-slate-600 mb-3 leading-relaxed">{file.desc}</p>
-                        <div className="flex items-center gap-1 text-[10px] text-slate-500 bg-slate-50 px-2 py-1 rounded w-fit border border-slate-100">
-                            <Calendar size={10} /> <span>版本：{file.date}</span>
-                        </div>
+                        <div className="flex items-center gap-1 text-[10px] text-slate-500 bg-slate-50 px-2 py-1 rounded w-fit border border-slate-100"><Calendar size={10} /> <span>版本：{file.date}</span></div>
                       </div>
-
                       {file.isCustom && (
-                          <button onClick={() => handleDeleteCustomDoc(file.id)} className="absolute top-3 right-3 p-1.5 text-slate-300 hover:text-rose-500 transition-colors">
-                            <Trash2 size={16} />
-                          </button>
+                          <button onClick={() => handleDeleteCustomDoc(file.id)} className="absolute top-3 right-3 p-1.5 text-slate-300 hover:text-rose-500 transition-colors"><Trash2 size={16} /></button>
                       )}
                     </div>
                   ))}

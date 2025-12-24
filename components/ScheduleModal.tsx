@@ -23,6 +23,7 @@ interface ScheduledTask {
   targetTime: string; // HH:mm
   info: string;
   targetGroupNames: string[];
+  targetGroupIds: string[]; // 新增：用於 API 發送
   createdAt: string;
 }
 
@@ -171,51 +172,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
      }
   }, [previewDate, forceSuspend, calibrationOffset, staffList]);
 
-  const handleCalibrationChange = (delta: number) => {
-      const newOffset = calibrationOffset + delta;
-      setCalibrationOffset(newOffset);
-      localStorage.setItem('roster_calibration_offset', newOffset.toString());
-  };
-
-  const handleSetOverrideAsAnchor = () => {
-      if (!overridePerson || !previewDate) return;
-      if (!window.confirm(`確定要將「${overridePerson}」設為本週 (${previewDate}) 的起始點嗎？\n此操作將會重置整個輪值順序，未來將依此順序遞延。`)) return;
-
-      const dateObj = new Date(previewDate);
-      const anchorDate = new Date('2025-12-08T00:00:00+08:00'); 
-      const anchorIndex = 6; 
-      const oneWeekMs = 604800000;
-      const rawDiffTime = dateObj.getTime() - anchorDate.getTime();
-      const rawWeeks = Math.floor(rawDiffTime / oneWeekMs);
-
-      const targetIndex = staffList.indexOf(overridePerson);
-      if (targetIndex === -1) return;
-
-      let newOffset = (targetIndex - anchorIndex - rawWeeks) % staffList.length;
-      if (newOffset < 0) newOffset += staffList.length;
-      if (newOffset > staffList.length / 2) newOffset -= staffList.length;
-
-      setCalibrationOffset(newOffset);
-      localStorage.setItem('roster_calibration_offset', newOffset.toString());
-      setOverridePerson(''); 
-      alert(`已重置順序！偏移量更新為: ${newOffset} 週`);
-  };
-
-  const handleAddStaff = () => {
-      if (!newStaffName.trim()) return;
-      const updated = [...staffList, newStaffName.trim()];
-      setStaffList(updated);
-      localStorage.setItem('roster_staff_list', JSON.stringify(updated));
-      setNewStaffName('');
-  };
-
-  const handleDeleteStaff = (index: number) => {
-      if (!window.confirm('確定移除此人員？')) return;
-      const updated = staffList.filter((_, i) => i !== index);
-      setStaffList(updated);
-      localStorage.setItem('roster_staff_list', JSON.stringify(updated));
-  };
-
   const scrollToBottom = () => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -298,14 +254,17 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       targetTime: scheduleTime,
       info: infoText,
       targetGroupNames: groupNames,
+      targetGroupIds: [...selectedGroupIds], // 儲存 ID 以供背景執行器發送
       createdAt: new Date().toISOString()
     };
 
     const updated = [...scheduledTasks, newTask];
     setScheduledTasks(updated);
     localStorage.setItem('scheduled_tasks_v1', JSON.stringify(updated));
-    addLog(`📅 已將任務加入預約佇列：${newTask.targetDate} ${newTask.targetTime}`);
+    addLog(`📅 已加入預約佇列：${newTask.targetDate} ${newTask.targetTime}`);
     setIsScheduleMode(false);
+    
+    alert(`任務已存入佇列！系統會在 ${newTask.targetDate} ${newTask.targetTime} 自動發送。`);
   };
 
   const handleDeleteTask = (taskId: string) => {
@@ -339,13 +298,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       else if (isManualSuspendMode) type = 'suspend';
       else type = 'weekly';
 
-      if (isManualSuspendMode && !customReason.trim()) {
-          addLog('❌ 錯誤：暫停週請務必填寫「原因」', false);
-          alert('請輸入暫停原因 (例如：颱風停班停課)');
-          setIsTriggering(false);
-          return;
-      }
-
       let baseUrl = '';
       if (connectionMode === 'remote') {
           baseUrl = remoteUrl.replace(/\/$/, ''); 
@@ -354,15 +306,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       const apiPath = '/api/cron'; 
       const targetUrl = `${baseUrl}${apiPath}`;
       
-      addLog(`正在連線至: ${connectionMode === 'remote' ? baseUrl : '[同源本地]'}`);
-      addLog(`執行模式: ${type}`);
-      if (type === 'weekly' && calibrationOffset !== 0) {
-          addLog(`🔧 輪值校正: ${calibrationOffset > 0 ? '+' : ''}${calibrationOffset} 週`);
-      }
-      if (type === 'weekly' && overridePerson) {
-          addLog(`📝 指定人員: ${overridePerson}`);
-      }
-
       const params = new URLSearchParams();
       params.append('manual', 'true');
       params.append('type', type);
@@ -371,53 +314,20 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       params.append('content', generalContent);
       params.append('groupId', selectedGroupIds.join(','));
       
-      if (calibrationOffset !== 0) {
-          params.append('shift', calibrationOffset.toString());
-      }
-      
-      if (type === 'weekly' && overridePerson) {
-          params.append('person', overridePerson);
-      }
-
-      params.append('staffList', staffList.join(','));
-
       const fullUrl = `${targetUrl}?${params.toString()}`;
 
       try {
           const res = await fetch(fullUrl, { method: 'GET' });
-          
-          if (!res.ok) {
-               let errorMsg = `HTTP ${res.status} ${res.statusText}`;
-               if (res.status === 404) {
-                   errorMsg = `404 找不到路徑。請檢查網址或部署狀態`;
-               }
-               try {
-                   const errJson = await res.json();
-                   if (errJson.message) errorMsg += ` - ${errJson.message}`;
-               } catch (e) {}
-               throw new Error(errorMsg);
-          }
-
           const data = await res.json();
           if (data.success) {
               addLog(`✅ 發送成功！已推送至 ${data.sentTo?.length || 0} 個群組`, true);
-              if (data.errors) {
-                  data.errors.forEach((err: string) => addLog(`⚠️ 部分失敗: ${err}`, false));
-              }
-              
-              let infoText = "";
-              if (type === 'weekly') infoText = overridePerson || dutyPerson;
-              else if (type === 'suspend') infoText = customReason || "特殊事由";
-              else infoText = generalContent;
-              
+              let infoText = (type === 'weekly') ? (overridePerson || dutyPerson) : (type === 'suspend' ? (customReason || "特殊事由") : generalContent);
               onGenerate(type as any, infoText);
-              setTimeout(() => onClose(), 3000);
+              setTimeout(() => onClose(), 2000);
           } else {
               throw new Error(data.message || '未知錯誤');
           }
-
       } catch (error: any) {
-          console.error(error);
           addLog(`❌ 執行失敗: ${error.message}`, false);
       } finally {
           setIsTriggering(false);
@@ -436,7 +346,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
             <Clock className="w-5 h-5 text-emerald-400" />
             <div>
                  <h2 className="text-lg font-bold tracking-wide official-font">排程廣播控制台</h2>
-                 <p className="text-[10px] text-slate-400 opacity-80">CRON JOB MANAGER (ADVANCED)</p>
+                 <p className="text-[10px] text-slate-400 opacity-80 uppercase">Cron Job Manager (Advanced)</p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white p-1 rounded-full transition-colors"><X size={20} /></button>
@@ -448,7 +358,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
             {/* Left Panel: Settings & Input */}
             <div className="w-full md:w-[60%] flex flex-col bg-slate-50 border-r border-slate-200">
                 <div className="flex-1 overflow-y-auto p-6">
-                    
                     {/* Connection Config */}
                     <div className="mb-6 bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
                          <div className="flex items-center justify-between">
@@ -462,11 +371,9 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                              </div>
                          </div>
                          {connectionMode === 'remote' && (
-                             <div className="mt-3">
-                                 <div className="flex gap-2">
-                                     <input type="text" value={remoteUrl} onChange={e => setRemoteUrl(e.target.value)} className="flex-1 px-3 py-1.5 text-xs border rounded bg-slate-50 text-slate-900 font-mono" placeholder="Vercel App URL"/>
-                                     <button onClick={() => { localStorage.setItem('remote_api_url', remoteUrl); alert('已儲存'); }} className="bg-slate-200 text-slate-600 px-3 py-1.5 rounded text-xs">儲存</button>
-                                 </div>
+                             <div className="mt-3 flex gap-2">
+                                 <input type="text" value={remoteUrl} onChange={e => setRemoteUrl(e.target.value)} className="flex-1 px-3 py-1.5 text-xs border rounded bg-slate-50 text-slate-900 font-mono" placeholder="Vercel App URL"/>
+                                 <button onClick={() => { localStorage.setItem('remote_api_url', remoteUrl); alert('已儲存'); }} className="bg-slate-200 text-slate-600 px-3 py-1.5 rounded text-xs">儲存</button>
                              </div>
                          )}
                     </div>
@@ -496,7 +403,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                             {isSelected ? <CheckSquare size={14} className="text-indigo-600"/> : <Square size={14} />}
                                             <span className="text-xs font-medium">{group.name}</span>
                                         </div>
-                                        <span className="text-[10px] font-mono opacity-50">{group.groupId.substring(0, 4)}...</span>
+                                        <span className="text-[10px] font-mono opacity-60 text-slate-400">{group.groupId.substring(0, 4)}...</span>
                                     </div>
                                 );
                             })}
@@ -505,8 +412,8 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
 
                     {/* Tabs */}
                     <div className="flex bg-slate-200 rounded-lg p-1 mb-4">
-                        <button onClick={() => setActiveTab('roster')} className={`flex-1 py-2 rounded-md text-xs font-bold flex items-center justify-center gap-2 ${activeTab === 'roster' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}><UserCircle size={14} /> 科務會議輪值</button>
-                        <button onClick={() => setActiveTab('general')} className={`flex-1 py-2 rounded-md text-xs font-bold flex items-center justify-center gap-2 ${activeTab === 'general' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}><MessageSquare size={14} /> 一般公告</button>
+                        <button onClick={() => setActiveTab('roster')} className={`flex-1 py-2 rounded-md text-xs font-bold flex items-center justify-center gap-2 ${activeTab === 'roster' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600'}`}><UserCircle size={14} /> 科務會議輪值</button>
+                        <button onClick={() => setActiveTab('general')} className={`flex-1 py-2 rounded-md text-xs font-bold flex items-center justify-center gap-2 ${activeTab === 'general' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600'}`}><MessageSquare size={14} /> 一般公告</button>
                     </div>
 
                     {/* Content Area */}
@@ -515,30 +422,16 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                             <div className="space-y-4">
                                 <div className="flex flex-col gap-1">
                                     <label className="text-xs font-bold text-slate-500">日期</label>
-                                    <input type="date" value={previewDate} onChange={e => setPreviewDate(e.target.value)} className="w-full px-3 py-2 text-sm border rounded"/>
+                                    <input type="date" value={previewDate} onChange={e => setPreviewDate(e.target.value)} className="w-full px-3 py-2 text-sm border rounded text-slate-900"/>
                                 </div>
                                 <div className={`p-3 rounded border ${forceSuspend || isSkipWeek ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
                                     <div className="text-[10px] font-bold text-slate-400 mb-1">推算輪值</div>
                                     <div className="font-bold text-lg text-slate-800">{overridePerson || dutyPerson}</div>
-                                    <div className="mt-2 flex gap-2">
-                                        <select value={overridePerson} onChange={e => {setOverridePerson(e.target.value); if(e.target.value) setForceSuspend(false);}} className="flex-1 px-2 py-1.5 text-xs border rounded">
-                                            <option value="">-- 使用推算 --</option>
-                                            {staffList.map(p => <option key={p} value={p}>{p}</option>)}
-                                        </select>
-                                    </div>
                                 </div>
-                                <div className="flex items-center gap-2 p-2 rounded-lg border border-orange-100 bg-orange-50 cursor-pointer" onClick={() => !overridePerson && !isSkipWeek && setForceSuspend(!forceSuspend)}>
-                                    <div className={`w-4 h-4 rounded border bg-white flex items-center justify-center ${forceSuspend ? 'border-orange-500' : 'border-slate-300'}`}>
-                                        {forceSuspend && <div className="w-2.5 h-2.5 bg-orange-500 rounded-sm"></div>}
-                                    </div>
-                                    <span className="text-xs font-bold text-orange-800">突發強制暫停</span>
-                                </div>
-                                <input type="text" placeholder="原因/備註" value={customReason} onChange={e => setCustomReason(e.target.value)} className="w-full px-3 py-2 text-sm border rounded"/>
+                                <input type="text" placeholder="原因/備註" value={customReason} onChange={e => setCustomReason(e.target.value)} className="w-full px-3 py-2 text-sm border rounded text-slate-900"/>
                             </div>
                         ) : (
-                            <div className="space-y-3">
-                                <textarea value={generalContent} onChange={e => setGeneralContent(e.target.value)} placeholder="公告內容..." className="w-full min-h-[120px] px-3 py-2 text-sm border rounded resize-none outline-none"/>
-                            </div>
+                            <textarea value={generalContent} onChange={e => setGeneralContent(e.target.value)} placeholder="公告內容..." className="w-full min-h-[120px] px-3 py-2 text-sm border rounded resize-none outline-none text-slate-900"/>
                         )}
                     </div>
                 </div>
@@ -561,42 +454,36 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                     {isScheduleMode && (
                         <div className="p-3 bg-white border border-indigo-200 rounded-lg flex items-center gap-4 animate-in fade-in slide-in-from-bottom-2">
                              <div className="flex-1">
-                                 <label className="text-[10px] font-bold text-slate-500 block mb-1">預約發送時間</label>
-                                 <input type="time" value={scheduleTime} onChange={e => setScheduleTime(e.target.value)} className="w-full px-2 py-1.5 border rounded text-sm"/>
+                                 <label className="text-[10px] font-bold text-slate-500 block mb-1">發送時間</label>
+                                 <input type="time" value={scheduleTime} onChange={e => setScheduleTime(e.target.value)} className="w-full px-2 py-1.5 border rounded text-sm text-slate-900"/>
                              </div>
                              <div className="flex-1">
-                                 <label className="text-[10px] font-bold text-slate-500 block mb-1">預約發送日期</label>
+                                 <label className="text-[10px] font-bold text-slate-500 block mb-1">日期</label>
                                  <div className="text-xs font-bold text-slate-800 py-1.5">{previewDate}</div>
                              </div>
                         </div>
                     )}
 
-                    <button 
-                        onClick={handleTrigger}
-                        disabled={isTriggering || (activeTab === 'general' && !generalContent.trim())}
-                        className={`w-full py-3.5 rounded-lg font-bold flex items-center justify-center gap-2 shadow-lg transition-all
-                        ${isTriggering ? 'bg-slate-100 text-slate-400' : (isScheduleMode ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white')}`}
-                    >
+                    <button onClick={handleTrigger} disabled={isTriggering || (activeTab === 'general' && !generalContent.trim())} className={`w-full py-3.5 rounded-lg font-bold flex items-center justify-center gap-2 shadow-lg transition-all ${isTriggering ? 'bg-slate-100 text-slate-400' : (isScheduleMode ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white')}`}>
                          {isTriggering ? <RefreshCw size={18} className="animate-spin" /> : (isScheduleMode ? <CalendarCheck size={18} /> : <ArrowRight size={18} />)}
-                         {isTriggering ? '執行中...' : (isScheduleMode ? '加入預約排程佇列' : '確認發送廣播 (立刻)' )}
+                         {isTriggering ? '執行中...' : (isScheduleMode ? '確認加入預約排程' : '立即廣播發送')}
                     </button>
                 </div>
             </div>
 
-            {/* Right Panel: Split Console */}
-            <div className="hidden md:flex flex-col md:w-[40%] bg-black font-mono text-xs z-10 border-l border-slate-700">
-                
-                {/* Upper: Terminal Logs */}
+            {/* Right Panel: Console (Contrast Improved) */}
+            <div className="hidden md:flex flex-col md:w-[40%] bg-slate-950 font-mono text-xs z-10 border-l border-slate-700">
+                {/* Upper: Logs */}
                 <div className="h-1/2 flex flex-col border-b border-slate-800 overflow-hidden">
-                    <div className="p-2 bg-slate-900 border-b border-gray-800 text-emerald-500 text-[10px] flex justify-between shrink-0">
-                        <span className="flex items-center gap-1"><Terminal size={10}/> TERMINAL OUT</span>
-                        <span className="opacity-50">{connectionMode.toUpperCase()}</span>
+                    <div className="p-2 bg-slate-900 border-b border-slate-800 text-emerald-400 text-[10px] flex justify-between shrink-0">
+                        <span className="flex items-center gap-1 font-bold"><Terminal size={10}/> TERMINAL OUT</span>
+                        <span className="text-slate-300">API: {connectionMode.toUpperCase()}</span>
                     </div>
-                    <div className="flex-1 p-3 overflow-y-auto space-y-1 text-emerald-500/90">
-                        {logs.length === 0 && <div className="text-gray-700 opacity-30 text-center mt-10 italic">Awaiting actions...</div>}
+                    <div className="flex-1 p-3 overflow-y-auto space-y-1 text-emerald-400/90">
+                        {logs.length === 0 && <div className="text-slate-400 text-center mt-10 italic">Awaiting connection...</div>}
                         {logs.map((log, idx) => (
-                            <div key={idx} className={`flex gap-2 ${log.success === false ? 'text-red-500' : (log.success === true ? 'text-emerald-400' : 'text-gray-300')}`}>
-                                <span className="opacity-40">[{log.time}]</span>
+                            <div key={idx} className={`flex gap-2 ${log.success === false ? 'text-red-400' : (log.success === true ? 'text-emerald-300' : 'text-slate-300')}`}>
+                                <span className="text-slate-500">[{log.time}]</span>
                                 <span className="break-all">{log.msg}</span>
                             </div>
                         ))}
@@ -604,50 +491,44 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                     </div>
                 </div>
 
-                {/* Lower: Pending Scheduled Tasks */}
-                <div className="h-1/2 flex flex-col overflow-hidden bg-slate-950">
-                    <div className="p-2 bg-slate-900 border-b border-slate-800 text-amber-500 text-[10px] flex justify-between shrink-0">
-                        <span className="flex items-center gap-1"><ListOrdered size={10}/> PENDING SCHEDULES (預排佇列)</span>
-                        <span className="text-slate-500">{scheduledTasks.length} Tasks</span>
+                {/* Lower: Queue (Contrast Improved) */}
+                <div className="h-1/2 flex flex-col overflow-hidden">
+                    <div className="p-2 bg-slate-900 border-b border-slate-800 text-amber-400 text-[10px] flex justify-between shrink-0 font-bold">
+                        <span className="flex items-center gap-1"><ListOrdered size={10}/> PENDING SCHEDULES</span>
+                        <span className="text-slate-300">{scheduledTasks.length} Tasks</span>
                     </div>
                     <div className="flex-1 p-3 overflow-y-auto space-y-3">
                         {scheduledTasks.length === 0 && (
-                            <div className="h-full flex flex-col items-center justify-center opacity-20 text-slate-500 text-center p-4">
-                                <CalendarDays size={32} className="mb-2"/>
-                                <p>目前無預約排程</p>
+                            <div className="h-full flex flex-col items-center justify-center text-slate-300 text-center p-4">
+                                <CalendarDays size={32} className="mb-2 opacity-30"/>
+                                <p className="opacity-40">目前無預約排程</p>
                             </div>
                         )}
                         {scheduledTasks.map((task) => (
-                            <div key={task.id} className="bg-slate-900 border border-slate-800 rounded p-2.5 relative group hover:border-amber-900/50 transition-colors">
+                            <div key={task.id} className="bg-slate-900 border border-slate-800 rounded p-2.5 relative group hover:border-amber-900/50 transition-colors shadow-inner">
                                 <div className="flex items-center justify-between mb-1.5">
                                     <div className="flex items-center gap-2">
-                                        <span className={`px-1.5 py-0.5 rounded-[3px] text-[8px] font-bold uppercase ${
-                                            task.type === 'weekly' ? 'bg-indigo-900 text-indigo-300' : 
-                                            task.type === 'suspend' ? 'bg-red-900 text-red-300' : 'bg-emerald-900 text-emerald-300'
-                                        }`}>
+                                        <span className={`px-1.5 py-0.5 rounded-[3px] text-[8px] font-bold uppercase ${task.type === 'weekly' ? 'bg-indigo-900 text-indigo-100' : task.type === 'suspend' ? 'bg-red-900 text-red-100' : 'bg-emerald-900 text-emerald-100'}`}>
                                             {task.type}
                                         </span>
-                                        <span className="text-amber-500 font-bold text-[10px] flex items-center gap-1">
+                                        <span className="text-amber-300 font-bold text-[10px] flex items-center gap-1">
                                             <Clock size={10}/> {task.targetDate} {task.targetTime}
                                         </span>
                                     </div>
-                                    <button onClick={() => handleDeleteTask(task.id)} className="text-slate-600 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100">
-                                        <Trash2 size={12}/>
-                                    </button>
+                                    <button onClick={() => handleDeleteTask(task.id)} className="text-slate-300 hover:text-red-400 transition-colors"><Trash2 size={12}/></button>
                                 </div>
-                                <div className="text-slate-300 text-[11px] font-medium border-l-2 border-slate-700 pl-2 mb-2 line-clamp-2">
+                                <div className="text-slate-100 text-[11px] font-medium border-l-2 border-slate-700 pl-2 mb-2 line-clamp-2 italic">
                                     {task.info}
                                 </div>
                                 <div className="flex flex-wrap gap-1">
                                     {task.targetGroupNames.map((g, i) => (
-                                        <span key={i} className="text-[8px] bg-slate-800 text-slate-500 px-1 py-0.5 rounded">@{g}</span>
+                                        <span key={i} className="text-[8px] bg-slate-800 text-slate-300 px-1 py-0.5 rounded border border-slate-700">@{g}</span>
                                     ))}
                                 </div>
                             </div>
                         ))}
                     </div>
                 </div>
-
             </div>
         </div>
       </div>
