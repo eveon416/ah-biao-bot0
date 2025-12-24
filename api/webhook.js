@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { Client, validateSignature } from "@line/bot-sdk";
 import { Buffer } from 'node:buffer';
@@ -219,7 +218,6 @@ export default async function handler(req, res) {
       channelSecret: process.env.CHANNEL_SECRET,
     });
     
-    // Always use process.env.API_KEY for initializing GoogleGenAI.
     const apiKey = process.env.API_KEY;
     
     await Promise.all(events.map(async (event) => {
@@ -285,7 +283,6 @@ export default async function handler(req, res) {
       try {
         if (!apiKey) throw new Error("API_KEY_MISSING");
         
-        // Initialize Gemini client with gemini-3-flash-preview for administrative consulting tasks.
         const ai = new GoogleGenAI({ apiKey: apiKey });
 
         const sessionKey = userId || 'unknown';
@@ -296,18 +293,23 @@ export default async function handler(req, res) {
         }));
 
         const chat = ai.chats.create({
-          model: 'gemini-3-flash-preview',
+          model: 'gemini-2.5-flash',
           history: history,
           config: {
             tools: [{ googleSearch: {} }],
             systemInstruction: SYSTEM_INSTRUCTION, // 已套用新的無 Markdown 規範
             temperature: 0.0,
-            maxOutputTokens: 2048,
+            maxOutputTokens: 2048, 
+            safetySettings: [
+                { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+            ]
           },
         });
 
         const result = await chat.sendMessage({ message: userMessage });
-        // Correctly extract the text output from the response property.
         let replyText = result.text; 
         
         if (!replyText) {
