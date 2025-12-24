@@ -1,14 +1,10 @@
+
 import { GoogleGenAI, Content, Part } from "@google/genai";
 import { SYSTEM_INSTRUCTION } from '../constants';
 import { Message } from '../types';
 
-const apiKey = process.env.API_KEY;
-
-if (!apiKey) {
-  console.error("API_KEY is not defined in the environment variables.");
-}
-
-const ai = new GoogleGenAI({ apiKey: apiKey || 'DUMMY_KEY_FOR_BUILD' });
+// Use process.env.API_KEY directly for initializing the Google GenAI client.
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 // Convert our app's Message format to the API's Content format
 const formatHistory = (messages: Message[]): Content[] => {
@@ -31,8 +27,8 @@ export const streamResponse = async (
     
     const historyMessages = currentHistory.slice(0, -1); // 排除最後一則（即當前的 userMessage）
 
-    // Using the 'gemini-2.5-flash' model for speed and accuracy in reasoning.
-    const model = 'gemini-2.5-flash';
+    // Use gemini-3-flash-preview for the task of administrative assistance.
+    const model = 'gemini-3-flash-preview';
 
     const chat = ai.chats.create({
       model: model,
@@ -41,12 +37,6 @@ export const streamResponse = async (
         systemInstruction: SYSTEM_INSTRUCTION,
         temperature: 0.0, // Set to 0.0 for maximum precision as requested
         maxOutputTokens: 2048,
-        safetySettings: [
-          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-        ]
       },
       history: formatHistory(historyMessages),
     });
@@ -55,7 +45,8 @@ export const streamResponse = async (
 
     let fullText = "";
     for await (const chunk of result) {
-      const text = chunk.text; // Access .text directly property
+      // Access the .text property directly from the chunk as per latest SDK guidelines.
+      const text = chunk.text;
       if (text) {
         fullText += text;
         onChunk(fullText);
