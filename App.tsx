@@ -41,7 +41,7 @@ const App: React.FC = () => {
     inputRef.current?.focus();
   }, []);
 
-  // --- 背景預約排程執行邏輯 (修正發送失敗問題) ---
+  // --- 背景預約排程執行邏輯 (修正發送判定邏輯) ---
   useEffect(() => {
     const processQueue = async () => {
       const savedTasks = localStorage.getItem('scheduled_tasks_v1');
@@ -52,8 +52,12 @@ const App: React.FC = () => {
         if (!Array.isArray(tasks) || tasks.length === 0) return;
 
         const now = new Date();
-        const nowYMD = now.toISOString().split('T')[0];
-        // 確保格式為 HH:mm
+        // 修正：使用本地日期 (Local Date) 進行比對，而非 UTC
+        const y = now.getFullYear();
+        const m = String(now.getMonth() + 1).padStart(2, '0');
+        const d = String(now.getDate()).padStart(2, '0');
+        const nowYMD = `${y}-${m}-${d}`;
+        
         const hours = String(now.getHours()).padStart(2, '0');
         const minutes = String(now.getMinutes()).padStart(2, '0');
         const nowHM = `${hours}:${minutes}`;
@@ -62,7 +66,7 @@ const App: React.FC = () => {
         const tasksToRun = tasks.filter(t => t.targetDate === nowYMD && t.targetTime === nowHM);
         
         if (tasksToRun.length > 0) {
-          console.log(`[Scheduler] 發現 ${tasksToRun.length} 個到期任務，準備執行...`);
+          console.log(`[Scheduler] 發現 ${tasksToRun.length} 個到期任務 (${nowYMD} ${nowHM})，準備執行...`);
           
           // 立即更新快取，避免在一分鐘內重複觸發
           const remainingTasks = tasks.filter(t => !(t.targetDate === nowYMD && t.targetTime === nowHM));
@@ -81,7 +85,6 @@ const App: React.FC = () => {
               if (task.type === 'general') params.append('content', task.info);
               if (task.type === 'weekly') params.append('person', task.info);
               
-              // 重要：傳入當初設定的群組 ID 列表
               if (task.targetGroupIds && task.targetGroupIds.length > 0) {
                   params.append('groupId', task.targetGroupIds.join(','));
               }
@@ -106,7 +109,6 @@ const App: React.FC = () => {
       }
     };
 
-    // 每 30 秒檢查一次，確保不遺漏分鐘切換
     const timer = setInterval(processQueue, 30000);
     return () => clearInterval(timer);
   }, []);
@@ -129,7 +131,7 @@ const App: React.FC = () => {
     const botMsg: Message = {
       id: botMsgId,
       role: 'model',
-      content: '', // Start empty
+      content: '', 
       timestamp: new Date(),
     };
 
