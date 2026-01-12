@@ -11,6 +11,21 @@ import { WELCOME_MESSAGE } from './constants';
 import { streamResponse } from './services/geminiService';
 import { Send, RefreshCw, Eraser } from 'lucide-react';
 
+// 定義任務介面以供 App 使用
+interface ScheduledTask {
+  id: string;
+  type: 'weekly' | 'suspend' | 'general';
+  targetDate: string;
+  targetTime: string;
+  info: string;
+  targetGroupNames: string[];
+  targetGroupIds: string[];
+  createdAt: string;
+  repeatType: 'none' | 'daily' | 'weekly' | 'monthly';
+  repeatDays?: number[];
+  repeatDate?: number;
+}
+
 const App: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -25,8 +40,21 @@ const App: React.FC = () => {
   const [isRulesOpen, setIsRulesOpen] = useState(false);
   const [isFilesOpen, setIsFilesOpen] = useState(false);
   const [isScheduleOpen, setIsScheduleOpen] = useState(false);
+  const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // 初始化時載入任務
+  useEffect(() => {
+    const saved = localStorage.getItem('scheduled_tasks_v1');
+    if (saved) {
+      try {
+        setScheduledTasks(JSON.parse(saved));
+      } catch (e) {
+        console.error("Failed to load tasks", e);
+      }
+    }
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -41,74 +69,106 @@ const App: React.FC = () => {
     inputRef.current?.focus();
   }, []);
 
-  // --- 背景預約排程執行邏輯 (修正發送判定邏輯) ---
+  // 輔助函式：計算下一次執行的日期
+  const calculateNextDate = (currentDateStr: string, repeatType: string, repeatDays?: number[], repeatDate?: number): string => {
+    const d = new Date(currentDateStr);
+    if (repeatType === 'daily') {
+      d.setDate(d.getDate() + 1);
+    } else if (repeatType === 'weekly' && repeatDays && repeatDays.length > 0) {
+      let found = false;
+      for (let i = 1; i <= 7; i++) {
+        const next = new Date(d);
+        next.setDate(d.getDate() + i);
+        if (repeatDays.includes(next.getDay())) {
+          d.setTime(next.getTime());
+          found = true;
+          break;
+        }
+      }
+      if (!found) d.setDate(d.getDate() + 7);
+    } else if (repeatType === 'monthly' && repeatDate) {
+      d.setMonth(d.getMonth() + 1);
+      d.setDate(repeatDate);
+    } else {
+      return ""; // 不重複
+    }
+    return d.toISOString().split('T')[0];
+  };
+
+  // --- 背景預約排程執行邏輯 ---
   useEffect(() => {
     const processQueue = async () => {
-      const savedTasks = localStorage.getItem('scheduled_tasks_v1');
-      if (!savedTasks) return;
+      // 每次執行從目前的 state 獲取最新任務，避免 stale closure
+      const tasks = JSON.parse(localStorage.getItem('scheduled_tasks_v1') || '[]');
+      if (!Array.isArray(tasks) || tasks.length === 0) return;
 
-      try {
-        let tasks = JSON.parse(savedTasks);
-        if (!Array.isArray(tasks) || tasks.length === 0) return;
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, '0');
+      const d = String(now.getDate()).padStart(2, '0');
+      const nowYMD = `${y}-${m}-${d}`;
+      
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const nowHM = `${hours}:${minutes}`;
 
-        const now = new Date();
-        // 修正：使用本地日期 (Local Date) 進行比對，而非 UTC
-        const y = now.getFullYear();
-        const m = String(now.getMonth() + 1).padStart(2, '0');
-        const d = String(now.getDate()).padStart(2, '0');
-        const nowYMD = `${y}-${m}-${d}`;
+      // 篩選出到期任務
+      const tasksToRun = tasks.filter(t => t.targetDate === nowYMD && t.targetTime === nowHM);
+      
+      if (tasksToRun.length > 0) {
+        console.log(`[Scheduler] 發現 ${tasksToRun.length} 個到期任務 (${nowYMD} ${nowHM})`);
         
-        const hours = String(now.getHours()).padStart(2, '0');
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        const nowHM = `${hours}:${minutes}`;
-
-        // 篩選出到期任務
-        const tasksToRun = tasks.filter(t => t.targetDate === nowYMD && t.targetTime === nowHM);
-        
-        if (tasksToRun.length > 0) {
-          console.log(`[Scheduler] 發現 ${tasksToRun.length} 個到期任務 (${nowYMD} ${nowHM})，準備執行...`);
-          
-          // 立即更新快取，避免在一分鐘內重複觸發
-          const remainingTasks = tasks.filter(t => !(t.targetDate === nowYMD && t.targetTime === nowHM));
-          localStorage.setItem('scheduled_tasks_v1', JSON.stringify(remainingTasks));
-
-          const remoteUrl = localStorage.getItem('remote_api_url') || 'https://ah-biao-bot0.vercel.app';
-
-          for (const task of tasksToRun) {
-            try {
-              const params = new URLSearchParams();
-              params.append('manual', 'true');
-              params.append('type', task.type);
-              params.append('date', task.targetDate);
-              
-              if (task.type === 'suspend') params.append('reason', task.info);
-              if (task.type === 'general') params.append('content', task.info);
-              if (task.type === 'weekly') params.append('person', task.info);
-              
-              if (task.targetGroupIds && task.targetGroupIds.length > 0) {
-                  params.append('groupId', task.targetGroupIds.join(','));
-              }
-              
-              const targetUrl = `${remoteUrl.replace(/\/$/, '')}/api/cron?${params.toString()}`;
-              const res = await fetch(targetUrl);
-              const data = await res.json();
-              
-              if (data.success) {
-                handleGenerateAnnouncement(task.type, task.info);
-                console.log(`[Scheduler] 任務 ${task.id} 執行成功`);
-              } else {
-                console.error(`[Scheduler] 任務 ${task.id} API 回傳失敗:`, data.message);
-              }
-            } catch (err) {
-              console.error(`[Scheduler] 任務 ${task.id} 網路請求出錯:`, err);
+        // 先計算更新後的任務清單（重複任務更新日期，單次任務移除）
+        const updatedTasks = tasks.map(t => {
+          if (t.targetDate === nowYMD && t.targetTime === nowHM) {
+            if (t.repeatType && t.repeatType !== 'none') {
+              const nextDate = calculateNextDate(t.targetDate, t.repeatType, t.repeatDays, t.repeatDate);
+              return { ...t, targetDate: nextDate };
             }
+            return null; // 單次任務，標記為移除
+          }
+          return t;
+        }).filter(Boolean) as ScheduledTask[];
+
+        // 立即同步到 localStorage 與 State，避免重複觸發
+        localStorage.setItem('scheduled_tasks_v1', JSON.stringify(updatedTasks));
+        setScheduledTasks(updatedTasks);
+
+        const remoteUrl = localStorage.getItem('remote_api_url') || 'https://ah-biao-bot0.vercel.app';
+
+        for (const task of tasksToRun) {
+          try {
+            const params = new URLSearchParams();
+            params.append('manual', 'true');
+            params.append('type', task.type);
+            params.append('date', task.targetDate);
+            
+            if (task.type === 'suspend') params.append('reason', task.info);
+            if (task.type === 'general') params.append('content', task.info);
+            if (task.type === 'weekly') params.append('person', task.info);
+            
+            if (task.targetGroupIds && task.targetGroupIds.length > 0) {
+                params.append('groupId', task.targetGroupIds.join(','));
+            }
+            
+            const targetUrl = `${remoteUrl.replace(/\/$/, '')}/api/cron?${params.toString()}`;
+            const res = await fetch(targetUrl);
+            const data = await res.json();
+            
+            if (data.success) {
+              handleGenerateAnnouncement(task.type, task.info);
+              console.log(`[Scheduler] 任務 ${task.id} 執行成功`);
+            } else {
+              console.error(`[Scheduler] 任務 ${task.id} API 回傳失敗:`, data.message);
+            }
+          } catch (err) {
+            console.error(`[Scheduler] 任務 ${task.id} 網路請求出錯:`, err);
           }
         }
-      } catch (e) {
-        console.error("[Scheduler] 解析任務佇列出錯", e);
       }
     };
 
+    // 每 30 秒檢查一次
     const timer = setInterval(processQueue, 30000);
     return () => clearInterval(timer);
   }, []);
@@ -245,6 +305,11 @@ ${info}
         onClose={() => setIsScheduleOpen(false)} 
         onGenerate={handleGenerateAnnouncement}
         onRequestRefine={handleRequestRefine}
+        tasks={scheduledTasks}
+        setTasks={(newTasks) => {
+          setScheduledTasks(newTasks);
+          localStorage.setItem('scheduled_tasks_v1', JSON.stringify(newTasks));
+        }}
       />
 
       <main className="flex-1 overflow-hidden flex flex-col relative max-w-5xl w-full mx-auto bg-white shadow-2xl md:my-4 md:rounded-xl md:border border-slate-200">

@@ -2,13 +2,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Clock, UserCircle, Terminal, MessageSquare, ArrowRight, Server, Users, Plus, Trash2, Globe, Sparkles, CheckSquare, Square, Settings, RefreshCw, AlertCircle, ShieldAlert, Edit3, Sliders, UserPlus, Minus, CalendarDays, ListOrdered, CalendarCheck, Save, Check, Repeat, RotateCw } from 'lucide-react';
 
-interface ScheduleModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onGenerate: (type: 'weekly' | 'suspend' | 'general', info: string) => void;
-  onRequestRefine?: (text: string) => void;
-}
-
 interface Group {
   id: string; 
   name: string;
@@ -30,6 +23,15 @@ interface ScheduledTask {
   repeatType: RepeatType;
   repeatDays?: number[]; // 0-6 for weekly
   repeatDate?: number;   // 1-31 for monthly
+}
+
+interface ScheduleModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onGenerate: (type: 'weekly' | 'suspend' | 'general', info: string) => void;
+  onRequestRefine?: (text: string) => void;
+  tasks: ScheduledTask[];
+  setTasks: (tasks: ScheduledTask[]) => void;
 }
 
 const PRESET_GROUPS: Group[] = [
@@ -61,7 +63,7 @@ const DAYS_OF_WEEK = [
     { label: '六', value: 6 }
 ];
 
-const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenerate, onRequestRefine }) => {
+const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenerate, onRequestRefine, tasks: scheduledTasks, setTasks: setScheduledTasks }) => {
   // Tabs
   const [activeTab, setActiveTab] = useState<'roster' | 'general'>('roster');
 
@@ -98,7 +100,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
   const [repeatType, setRepeatType] = useState<RepeatType>('none');
   const [repeatDays, setRepeatDays] = useState<number[]>([]);
   const [repeatMonthlyDate, setRepeatMonthlyDate] = useState<number>(1);
-  const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
 
   // Editing State for Queue
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -142,11 +143,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
           try { setStaffList(JSON.parse(savedStaff)); } catch(e) {}
       } else {
           setStaffList(DEFAULT_STAFF_LIST);
-      }
-
-      const savedTasks = localStorage.getItem('scheduled_tasks_v1');
-      if (savedTasks) {
-          try { setScheduledTasks(JSON.parse(savedTasks)); } catch(e) {}
       }
 
       const hostname = window.location.hostname;
@@ -241,19 +237,14 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
       setSelectedGroupIds(prev => [...prev, newG.groupId]);
   };
 
-  // 修正刪除預約任務邏輯：確保事件不冒泡，並正確過濾 state 與 localStorage
   const handleDeleteTask = (e: React.MouseEvent, taskId: string) => {
     e.preventDefault();
     e.stopPropagation();
     
     if (!window.confirm('確定要刪除此預約發送任務嗎？')) return;
     
-    setScheduledTasks(prevTasks => {
-      const updated = prevTasks.filter(t => t.id !== taskId);
-      localStorage.setItem('scheduled_tasks_v1', JSON.stringify(updated));
-      return updated;
-    });
-    
+    const updated = scheduledTasks.filter(t => t.id !== taskId);
+    setScheduledTasks(updated);
     addLog(`🗑️ 已從佇列移除任務：${taskId.substring(0, 8)}...`, true);
   };
 
@@ -270,23 +261,20 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
 
   const handleSaveEdit = () => {
       if (!editingTaskId) return;
-      setScheduledTasks(prev => {
-          const updated = prev.map(t => 
-              t.id === editingTaskId 
-              ? { 
-                  ...t, 
-                  targetDate: editDate, 
-                  targetTime: editTime, 
-                  info: editInfo,
-                  repeatType: editRepeatType,
-                  repeatDays: editRepeatType === 'weekly' ? editRepeatDays : undefined,
-                  repeatDate: editRepeatType === 'monthly' ? editRepeatMonthlyDate : undefined
-                } 
-              : t
-          );
-          localStorage.setItem('scheduled_tasks_v1', JSON.stringify(updated));
-          return updated;
-      });
+      const updated = scheduledTasks.map(t => 
+          t.id === editingTaskId 
+          ? { 
+              ...t, 
+              targetDate: editDate, 
+              targetTime: editTime, 
+              info: editInfo,
+              repeatType: editRepeatType,
+              repeatDays: editRepeatType === 'weekly' ? editRepeatDays : undefined,
+              repeatDate: editRepeatType === 'monthly' ? editRepeatMonthlyDate : undefined
+            } 
+          : t
+      );
+      setScheduledTasks(updated);
       setEditingTaskId(null);
       addLog(`📝 已更新預約任務：${editingTaskId.substring(0, 8)}...`, true);
   };
@@ -342,7 +330,6 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
 
     const updated = [...scheduledTasks, newTask];
     setScheduledTasks(updated);
-    localStorage.setItem('scheduled_tasks_v1', JSON.stringify(updated));
     addLog(`📅 已加入預約佇列：${newTask.targetDate} ${newTask.targetTime}${repeatType !== 'none' ? ` (${repeatType})` : ''}`);
     setIsScheduleMode(false);
     
@@ -490,7 +477,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                         <button onClick={() => setActiveTab('general')} className={`flex-1 py-2 rounded-md text-xs font-bold flex items-center justify-center gap-2 transition-all ${activeTab === 'general' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}><MessageSquare size={14} /> 一般公告</button>
                     </div>
 
-                    {/* Content Area (深色底圖配淺色文字修正) */}
+                    {/* Content Area */}
                     <div className="bg-slate-900 p-5 rounded-xl border border-slate-700 shadow-inner">
                         {activeTab === 'roster' ? (
                             <div className="space-y-4">
@@ -628,7 +615,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                 </div>
             </div>
 
-            {/* Right Panel: Console (深色底圖配淺色文字) */}
+            {/* Right Panel: Console */}
             <div className="hidden md:flex flex-col md:w-[40%] bg-slate-950 font-mono text-xs z-10 border-l border-slate-700">
                 {/* Upper: Terminal Logs */}
                 <div className="h-1/2 flex flex-col border-b border-slate-800 overflow-hidden">
@@ -648,7 +635,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                     </div>
                 </div>
 
-                {/* Lower: Pending Queue (帶編輯與重複功能) */}
+                {/* Lower: Pending Queue */}
                 <div className="h-1/2 flex flex-col overflow-hidden bg-slate-950">
                     <div className="p-2.5 bg-slate-900 border-b border-slate-800 text-amber-300 text-[10px] flex justify-between shrink-0 font-bold uppercase tracking-widest">
                         <span className="flex items-center gap-1.5"><ListOrdered size={12}/> Pending Queue</span>
