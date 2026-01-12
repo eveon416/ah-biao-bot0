@@ -26,6 +26,8 @@ interface ScheduledTask {
   repeatDate?: number;
 }
 
+const DEFAULT_STAFF_LIST = ['林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰', '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'];
+
 const App: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -69,26 +71,67 @@ const App: React.FC = () => {
     inputRef.current?.focus();
   }, []);
 
-  // 輔助函式：計算下一次執行的日期
+  // 輔助函式：計算輪值人員 (用於自動更新週期性任務)
+  const getDutyPersonForDate = (dateStr: string): string => {
+    if (!dateStr) return "未指定人員";
+    const dateObj = new Date(dateStr);
+    if (isNaN(dateObj.getTime())) return "日期無效";
+
+    const anchorDate = new Date('2025-12-08T00:00:00+08:00'); 
+    const anchorIndex = 6; // 陳怡妗
+    const oneWeekMs = 604800000;
+    
+    const savedOffset = parseInt(localStorage.getItem('roster_calibration_offset') || '0', 10);
+    const staffData = localStorage.getItem('roster_staff_list');
+    let savedStaff = DEFAULT_STAFF_LIST;
+    try {
+        if (staffData) savedStaff = JSON.parse(staffData);
+    } catch(e) {
+        savedStaff = DEFAULT_STAFF_LIST;
+    }
+    
+    const rawDiffTime = dateObj.getTime() - anchorDate.getTime();
+    const rawWeeks = Math.floor(rawDiffTime / oneWeekMs);
+    const totalWeeks = rawWeeks + savedOffset;
+
+    let targetIndex = (anchorIndex + totalWeeks) % savedStaff.length;
+    if (targetIndex < 0) targetIndex = targetIndex + savedStaff.length;
+    
+    const personName = savedStaff[targetIndex] || "未知人員";
+    return `${personName} (系統推算)`;
+  };
+
+  // 輔助函式：計算下一次執行的日期 (修正問題 3：解決日期清空問題)
   const calculateNextDate = (currentDateStr: string, repeatType: string, repeatDays?: number[], repeatDate?: number): string => {
     const d = new Date(currentDateStr);
+    if (isNaN(d.getTime())) return currentDateStr;
+
     if (repeatType === 'daily') {
       d.setDate(d.getDate() + 1);
-    } else if (repeatType === 'weekly' && repeatDays && repeatDays.length > 0) {
-      let found = false;
-      for (let i = 1; i <= 7; i++) {
-        const next = new Date(d);
-        next.setDate(d.getDate() + i);
-        if (repeatDays.includes(next.getDay())) {
-          d.setTime(next.getTime());
-          found = true;
-          break;
-        }
+    } else if (repeatType === 'weekly') {
+      if (repeatDays && repeatDays.length > 0) {
+          let found = false;
+          for (let i = 1; i <= 7; i++) {
+            const next = new Date(d);
+            next.setDate(d.getDate() + i);
+            if (repeatDays.includes(next.getDay())) {
+              d.setTime(next.getTime());
+              found = true;
+              break;
+            }
+          }
+          if (!found) d.setDate(d.getDate() + 7);
+      } else {
+          // 預設增加 7 天，解決 repeatDays 為空時日期清空的問題
+          d.setDate(d.getDate() + 7);
       }
-      if (!found) d.setDate(d.getDate() + 7);
-    } else if (repeatType === 'monthly' && repeatDate) {
-      d.setMonth(d.getMonth() + 1);
-      d.setDate(repeatDate);
+    } else if (repeatType === 'monthly') {
+      if (repeatDate) {
+        d.setMonth(d.getMonth() + 1);
+        d.setDate(repeatDate);
+      } else {
+        d.setMonth(d.getMonth() + 1);
+      }
     } else {
       return ""; // 不重複
     }
@@ -98,8 +141,10 @@ const App: React.FC = () => {
   // --- 背景預約排程執行邏輯 ---
   useEffect(() => {
     const processQueue = async () => {
-      // 每次執行從目前的 state 獲取最新任務，避免 stale closure
-      const tasks = JSON.parse(localStorage.getItem('scheduled_tasks_v1') || '[]');
+      const storedTasks = localStorage.getItem('scheduled_tasks_v1');
+      if (!storedTasks) return;
+      
+      const tasks = JSON.parse(storedTasks);
       if (!Array.isArray(tasks) || tasks.length === 0) return;
 
       const now = new Date();
@@ -118,19 +163,28 @@ const App: React.FC = () => {
       if (tasksToRun.length > 0) {
         console.log(`[Scheduler] 發現 ${tasksToRun.length} 個到期任務 (${nowYMD} ${nowHM})`);
         
-        // 先計算更新後的任務清單（重複任務更新日期，單次任務移除）
+        // 更新任務清單
         const updatedTasks = tasks.map(t => {
           if (t.targetDate === nowYMD && t.targetTime === nowHM) {
             if (t.repeatType && t.repeatType !== 'none') {
               const nextDate = calculateNextDate(t.targetDate, t.repeatType, t.repeatDays, t.repeatDate);
-              return { ...t, targetDate: nextDate };
+              
+              if (!nextDate) return null; // 如果無法計算下一次日期則刪除
+
+              let nextInfo = t.info;
+              // 如果是週一輪值，自動更新下一位人員
+              if (t.type === 'weekly' && !t.info.includes('暫停')) {
+                  nextInfo = getDutyPersonForDate(nextDate);
+              }
+              
+              return { ...t, targetDate: nextDate, info: nextInfo };
             }
             return null; // 單次任務，標記為移除
           }
           return t;
         }).filter(Boolean) as ScheduledTask[];
 
-        // 立即同步到 localStorage 與 State，避免重複觸發
+        // 立即同步，防止重複觸發
         localStorage.setItem('scheduled_tasks_v1', JSON.stringify(updatedTasks));
         setScheduledTasks(updatedTasks);
 
@@ -168,7 +222,6 @@ const App: React.FC = () => {
       }
     };
 
-    // 每 30 秒檢查一次
     const timer = setInterval(processQueue, 30000);
     return () => clearInterval(timer);
   }, []);

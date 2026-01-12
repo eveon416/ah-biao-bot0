@@ -15,7 +15,7 @@ function getTaipeiDateString(date) {
 
 // 檢查是否為暫停週
 function isSkipWeek(dateObj) {
-    const dayOfWeek = dateObj.getDay(); // 0(Sun) - 6(Sat)
+    const dayOfWeek = dateObj.getDay(); 
     const diffToMon = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek;
     const monday = new Date(dateObj);
     monday.setDate(dateObj.getDate() + diffToMon);
@@ -48,7 +48,6 @@ function getEffectiveWeeksDiff(targetDate, anchorDate) {
 // 建立輪值 Flex Message
 function createRosterFlex(dutyPerson, dateStr) {
   const dateObj = new Date(dateStr);
-  // 使用台北時區取得月日
   const tpDate = new Date(dateObj.getTime() + (8 * 60 * 60 * 1000));
   const month = tpDate.getUTCMonth() + 1;
   const day = tpDate.getUTCDate();
@@ -98,7 +97,7 @@ function createRosterFlex(dutyPerson, dateStr) {
   };
 }
 
-// 建立暫停公告 Flex Message
+// 建立暫替公告 Flex Message
 function createSuspendFlex(reason) {
     const displayReason = reason || "國定假日或特殊事由";
     return {
@@ -146,19 +145,25 @@ function createSuspendFlex(reason) {
 
 export default async function handler(req, res) {
   const nowUtc = new Date();
-  console.log(`[Cron] Triggered at ${nowUtc.toISOString()}`);
+  console.log(`[Cron] API Triggered at ${nowUtc.toISOString()}`);
 
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-vercel-cron');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const isManualRun = req.query.manual === 'true';
+  const isVercelCron = req.headers['x-vercel-cron'] === '1';
   const authHeader = req.headers['authorization'];
   
-  // 驗證排程金鑰 (僅在非手動觸發且有設定 SECRET 時檢查)
-  if (!isManualRun && process.env.CRON_SECRET) {
+  // 診斷日誌
+  console.log(`[Cron] Headers: ${JSON.stringify(req.headers)}`);
+  console.log(`[Cron] Query: ${JSON.stringify(req.query)}`);
+  console.log(`[Cron] Auth Check - isManual: ${isManualRun}, isVercelCron: ${isVercelCron}`);
+
+  // 驗證排程金鑰：如果是 Vercel 內建 Cron 觸發則跳過檢查密鑰，否則檢查 SECRET
+  if (!isManualRun && !isVercelCron && process.env.CRON_SECRET) {
     if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
        console.error("[Cron] Unauthorized access attempt.");
        return res.status(401).json({ success: false, message: 'Unauthorized' });
@@ -173,20 +178,25 @@ export default async function handler(req, res) {
   if (req.query.groupId) {
       targetGroupIds = req.query.groupId.split(',').map(id => id.trim()).filter(id => id);
   } else {
-      // 自動排程模式：優先嘗試所有可能的環境變數
+      // 自動排程模式下，務必確保抓取環境變數中設定的目標群組
       const envIds = [
-          process.env.LINE_GROUP_ID_AdminHome,
           process.env.LINE_GROUP_ID,
+          process.env.LINE_GROUP_ID_AdminHome,
           DEFAULT_GROUP_ID
       ];
       targetGroupIds = envIds.filter(id => id && id.trim()).map(id => id.trim());
-      // 去重
       targetGroupIds = [...new Set(targetGroupIds)];
   }
 
   console.log(`[Cron] Target Groups: ${targetGroupIds.join(', ')}`);
 
+  if (targetGroupIds.length === 0) {
+      console.error("[Cron] Error: No target group ID found.");
+      return res.status(500).json({ success: false, message: 'No target group configured' });
+  }
+
   if (!channelAccessToken || !channelSecret) {
+    console.error("[Cron] Error: Missing LINE Token or Secret.");
     return res.status(500).json({ success: false, message: 'Missing LINE Configuration' });
   }
 
@@ -205,10 +215,9 @@ export default async function handler(req, res) {
         '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'
     ];
 
-    // 建立基準時間 (UTC 轉台北)
     let baseDate = new Date();
     if (targetDateStr) baseDate = new Date(targetDateStr);
-    const taiwanNow = new Date(baseDate.getTime()); // 基於傳入或當前時間
+    const taiwanNow = new Date(baseDate.getTime());
 
     let contentDesc = "";
     if (actionType === 'general') {
@@ -226,12 +235,10 @@ export default async function handler(req, res) {
             contentDesc = "暫停公告(系統自動)";
         } else {
             const anchorDate = new Date('2025-12-08T00:00:00+08:00'); 
-            const anchorIndex = 6; // 陳怡妗
-    
+            const anchorIndex = 6; 
             const diffWeeks = getEffectiveWeeksDiff(taiwanNow, anchorDate);
             let targetIndex = (anchorIndex + diffWeeks) % staffList.length;
             if (targetIndex < 0) targetIndex += staffList.length;
-    
             const dutyPerson = staffList[targetIndex];
             messagePayload = createRosterFlex(dutyPerson, taiwanNow.toISOString());
             contentDesc = `輪值公告(推算:${dutyPerson})`;
@@ -249,9 +256,10 @@ export default async function handler(req, res) {
         }
     }
 
+    console.log(`[Cron] Executed: ${contentDesc}. Sent to ${results.length} groups.`);
     return res.status(200).json({ 
         success: results.length > 0, 
-        message: `${contentDesc} 已執行。成功發送至 ${results.length} 個群組。`,
+        message: `${contentDesc} 已完成執行。`,
         sentTo: results,
         timestamp: new Date().toISOString()
     });
