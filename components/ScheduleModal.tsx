@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Clock, UserCircle, Terminal, MessageSquare, ArrowRight, Server, Users, Plus, Trash2, Globe, Sparkles, CheckSquare, Square, Settings, RefreshCw, AlertCircle, ShieldAlert, Edit3, Sliders, UserPlus, Minus, CalendarDays, ListOrdered, CalendarCheck, Save, Check, Repeat, RotateCw } from 'lucide-react';
+import { X, Clock, UserCircle, Terminal, MessageSquare, ArrowRight, Server, Users, Plus, Trash2, Globe, Sparkles, CheckSquare, Square, Settings, RefreshCw, AlertCircle, ShieldAlert, Edit3, Sliders, UserPlus, Minus, CalendarDays, ListOrdered, CalendarCheck, Save, Check, Repeat, RotateCw, Play } from 'lucide-react';
 
 interface Group {
   id: string; 
@@ -246,6 +246,43 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
     const updated = scheduledTasks.filter(t => t.id !== taskId);
     setScheduledTasks(updated);
     addLog(`🗑️ 已從佇列移除任務：${taskId.substring(0, 8)}...`, true);
+  };
+
+  // 測試特定任務
+  const handleTestTask = async (task: ScheduledTask) => {
+    if (!window.confirm(`確定要立即測試任務「${task.info.substring(0, 10)}...」嗎？\n這將會立即發送至指定的 LINE 群組。`)) return;
+
+    addLog(`🧪 開始測試預約任務：${task.id.substring(0, 8)}...`);
+    
+    const baseUrl = connectionMode === 'remote' ? remoteUrl.replace(/\/$/, '') : '';
+    const apiPath = '/api/cron';
+    
+    const params = new URLSearchParams();
+    params.append('manual', 'true');
+    params.append('type', task.type);
+    params.append('date', task.targetDate);
+    
+    if (task.type === 'suspend') params.append('reason', task.info);
+    if (task.type === 'general') params.append('content', task.info);
+    if (task.type === 'weekly') params.append('person', task.info);
+    
+    if (task.targetGroupIds && task.targetGroupIds.length > 0) {
+        params.append('groupId', task.targetGroupIds.join(','));
+    }
+
+    try {
+        const fullUrl = `${baseUrl}${apiPath}?${params.toString()}`;
+        const res = await fetch(fullUrl);
+        const data = await res.json();
+        if (data.success) {
+            addLog(`✅ 測試發送成功！`, true);
+            onGenerate(task.type, task.info);
+        } else {
+            throw new Error(data.message || 'API 回傳失敗');
+        }
+    } catch (err: any) {
+        addLog(`❌ 測試失敗: ${err.message}`, false);
+    }
   };
 
   // 編輯任務邏輯
@@ -736,6 +773,13 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onGenera
                                                 )}
                                             </div>
                                             <div className="flex gap-1.5">
+                                                <button 
+                                                  onClick={() => handleTestTask(task)} 
+                                                  className="p-1.5 text-slate-400 hover:text-blue-400 hover:bg-blue-900/30 rounded-md transition-all active:scale-90 bg-slate-800/50 border border-slate-700/50"
+                                                  title="立即測試此預約"
+                                                >
+                                                    <Play size={14} />
+                                                </button>
                                                 <button 
                                                   onClick={() => handleStartEdit(task)} 
                                                   className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-amber-900/30 rounded-md transition-all active:scale-90 bg-slate-800/50 border border-slate-700/50"
