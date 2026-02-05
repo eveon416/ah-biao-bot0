@@ -1,49 +1,8 @@
 
 import { Client } from "@line/bot-sdk";
 
-// === 全域設定：需跳過輪值的週次 (以該週「週一」日期為準) ===
-const SKIP_WEEKS = ['2025-01-27', '2026-02-16']; 
-
-// 行政科預設群組 ID (作為環境變數未設定時的備案)
+// 行政科預設群組 ID
 const DEFAULT_GROUP_ID = 'Cb35ecb9f86b1968dd51e476fdc819655';
-
-// 輔助函式：取得台北時間的 YYYY-MM-DD
-function getTaipeiDateString(date) {
-    const offsetDate = new Date(date.getTime() + (8 * 60 * 60 * 1000));
-    return offsetDate.toISOString().split('T')[0];
-}
-
-// 檢查是否為暫停週
-function isSkipWeek(dateObj) {
-    const dayOfWeek = dateObj.getDay(); 
-    const diffToMon = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek;
-    const monday = new Date(dateObj);
-    monday.setDate(dateObj.getDate() + diffToMon);
-    
-    // 確保以台北時區判定
-    const mondayStr = getTaipeiDateString(monday);
-    return SKIP_WEEKS.includes(mondayStr);
-}
-
-// 計算有效週數差 (扣除暫停週)
-function getEffectiveWeeksDiff(targetDate, anchorDate) {
-    const oneWeekMs = 604800000;
-    const rawDiffTime = targetDate.getTime() - anchorDate.getTime();
-    const rawWeeks = Math.floor(rawDiffTime / oneWeekMs);
-
-    let skipCount = 0;
-    const start = rawDiffTime > 0 ? anchorDate : targetDate;
-    const end = rawDiffTime > 0 ? targetDate : anchorDate;
-
-    SKIP_WEEKS.forEach(skipDateStr => {
-        const skipDate = new Date(skipDateStr + 'T00:00:00+08:00');
-        if (skipDate >= start && skipDate < end) {
-            skipCount++;
-        }
-    });
-
-    return rawDiffTime > 0 ? (rawWeeks - skipCount) : (rawWeeks + skipCount);
-}
 
 // 建立輪值 Flex Message
 function createRosterFlex(dutyPerson, dateStr) {
@@ -97,7 +56,7 @@ function createRosterFlex(dutyPerson, dateStr) {
   };
 }
 
-// 建立暫替公告 Flex Message
+// 建立暫停公告 Flex Message
 function createSuspendFlex(reason) {
     const displayReason = reason || "國定假日或特殊事由";
     return {
@@ -145,27 +104,17 @@ function createSuspendFlex(reason) {
 
 export default async function handler(req, res) {
   const nowUtc = new Date();
-  console.log(`[Cron] API Triggered at ${nowUtc.toISOString()}`);
+  console.log(`[API/Cron] Manual Trigger at ${nowUtc.toISOString()}`);
 
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-vercel-cron');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const isManualRun = req.query.manual === 'true';
-  const isVercelCron = req.headers['x-vercel-cron'] === '1';
-  const authHeader = req.headers['authorization'];
-  
-  // 診斷日誌
-  console.log(`[Cron] Headers: ${JSON.stringify(req.headers)}`);
-  console.log(`[Cron] Query: ${JSON.stringify(req.query)}`);
-  console.log(`[Cron] Auth Check - isManual: ${isManualRun}, isVercelCron: ${isVercelCron}`);
-
-  // 驗證排程金鑰：如果是 Vercel 內建 Cron 觸發則跳過檢查密鑰，否則檢查 SECRET
-  if (!isManualRun && !isVercelCron && process.env.CRON_SECRET) {
-    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-       console.error("[Cron] Unauthorized access attempt.");
+  // 安全檢查：若非手動且有 SECRET，則驗證
+  if (req.query.manual !== 'true' && process.env.CRON_SECRET) {
+    if (req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
        return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
   }
@@ -173,75 +122,41 @@ export default async function handler(req, res) {
   const channelAccessToken = (process.env.CHANNEL_ACCESS_TOKEN || "").trim();
   const channelSecret = (process.env.CHANNEL_SECRET || "").trim();
   
-  // 決定發送目標
-  let targetGroupIds = [];
-  if (req.query.groupId) {
-      targetGroupIds = req.query.groupId.split(',').map(id => id.trim()).filter(id => id);
-  } else {
-      // 自動排程模式下，務必確保抓取環境變數中設定的目標群組
-      const envIds = [
-          process.env.LINE_GROUP_ID,
-          process.env.LINE_GROUP_ID_AdminHome,
-          DEFAULT_GROUP_ID
-      ];
-      targetGroupIds = envIds.filter(id => id && id.trim()).map(id => id.trim());
-      targetGroupIds = [...new Set(targetGroupIds)];
-  }
+  // 決定目標
+  let targetGroupIds = req.query.groupId 
+    ? req.query.groupId.split(',').map(id => id.trim()).filter(id => id)
+    : [process.env.LINE_GROUP_ID, process.env.LINE_GROUP_ID_AdminHome, DEFAULT_GROUP_ID].filter(id => id && id.trim());
 
-  console.log(`[Cron] Target Groups: ${targetGroupIds.join(', ')}`);
+  targetGroupIds = [...new Set(targetGroupIds)];
 
-  if (targetGroupIds.length === 0) {
-      console.error("[Cron] Error: No target group ID found.");
-      return res.status(500).json({ success: false, message: 'No target group configured' });
-  }
-
-  if (!channelAccessToken || !channelSecret) {
-    console.error("[Cron] Error: Missing LINE Token or Secret.");
-    return res.status(500).json({ success: false, message: 'Missing LINE Configuration' });
+  if (targetGroupIds.length === 0 || !channelAccessToken || !channelSecret) {
+    return res.status(500).json({ success: false, message: 'Missing Configuration' });
   }
 
   try {
     const client = new Client({ channelAccessToken, channelSecret });
     let messagePayload;
     
-    const actionType = req.query.type || 'weekly'; 
+    const actionType = req.query.type || 'general'; // 預設改為一般公告
     const customReason = req.query.reason || ''; 
     const customContent = req.query.content || ''; 
-    const targetDateStr = req.query.date; 
+    const targetDateStr = req.query.date || new Date().toISOString(); 
     const overridePerson = req.query.person; 
-    
-    let staffList = [
-        '林唯農', '宋憲昌', '江開承', '吳怡慧', '胡蔚杰',
-        '陳頤恩', '陳怡妗', '陳薏雯', '游智諺', '陳美杏'
-    ];
-
-    let baseDate = new Date();
-    if (targetDateStr) baseDate = new Date(targetDateStr);
-    const taiwanNow = new Date(baseDate.getTime());
 
     let contentDesc = "";
     if (actionType === 'general') {
-        messagePayload = { type: 'text', text: customContent };
+        messagePayload = { type: 'text', text: customContent || "（無內容公告）" };
         contentDesc = "一般公告";
     } else if (actionType === 'suspend') {
         messagePayload = createSuspendFlex(customReason);
         contentDesc = "暫停公告";
-    } else {
+    } else if (actionType === 'weekly') {
+        // 僅在明確傳入人員時才發送輪值卡
         if (overridePerson) {
-             messagePayload = createRosterFlex(overridePerson, taiwanNow.toISOString());
-             contentDesc = `輪值公告(指定:${overridePerson})`;
-        } else if (isSkipWeek(taiwanNow)) {
-            messagePayload = createSuspendFlex("適逢國定假日或特殊事由");
-            contentDesc = "暫停公告(系統自動)";
+            messagePayload = createRosterFlex(overridePerson, targetDateStr);
+            contentDesc = `輪值公告(${overridePerson})`;
         } else {
-            const anchorDate = new Date('2025-12-08T00:00:00+08:00'); 
-            const anchorIndex = 6; 
-            const diffWeeks = getEffectiveWeeksDiff(taiwanNow, anchorDate);
-            let targetIndex = (anchorIndex + diffWeeks) % staffList.length;
-            if (targetIndex < 0) targetIndex += staffList.length;
-            const dutyPerson = staffList[targetIndex];
-            messagePayload = createRosterFlex(dutyPerson, taiwanNow.toISOString());
-            contentDesc = `輪值公告(推算:${dutyPerson})`;
+            return res.status(400).json({ success: false, message: 'Weekly type requires person name' });
         }
     }
 
@@ -250,22 +165,18 @@ export default async function handler(req, res) {
         try {
             await client.pushMessage(groupId, messagePayload);
             results.push(groupId);
-            console.log(`[Cron] Successfully pushed to ${groupId}`);
         } catch (e) {
-            console.error(`[Cron] Push to ${groupId} failed:`, e.message);
+            console.error(`Push to ${groupId} failed:`, e.message);
         }
     }
 
-    console.log(`[Cron] Executed: ${contentDesc}. Sent to ${results.length} groups.`);
     return res.status(200).json({ 
         success: results.length > 0, 
-        message: `${contentDesc} 已完成執行。`,
-        sentTo: results,
-        timestamp: new Date().toISOString()
+        message: `${contentDesc} 已執行發送。`,
+        sentTo: results
     });
 
   } catch (error) {
-    console.error('[Cron] Fatal Error:', error);
     return res.status(500).json({ success: false, message: error.message });
   }
 }

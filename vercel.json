@@ -1,3 +1,4 @@
+
 {
   "rewrites": [
     {
@@ -7,12 +8,6 @@
     {
       "source": "/((?!api/|_next/|static/|.*\\..*).*)",
       "destination": "/index.html"
-    }
-  ],
-  "crons": [
-    {
-      "path": "/api/cron?type=weekly",
-      "schedule": "0 1 * * 1"
     }
   ]
 }
