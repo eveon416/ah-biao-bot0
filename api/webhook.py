@@ -152,8 +152,9 @@ def _reply(token: str, text: str):
 
 
 # ── Flask routes ──────────────────────────────────────────────────────────────
-@app.route("/webhook", methods=["POST"])
-@app.route("/",        methods=["POST"])   # fallback
+@app.route("/api/webhook", methods=["POST"])  # LINE 設定的 URL
+@app.route("/webhook",     methods=["POST"])  # 備用
+@app.route("/",            methods=["POST"])  # 備用
 def webhook():
     sig  = request.headers.get("X-Line-Signature", "")
     body = request.get_data()
@@ -185,8 +186,9 @@ def webhook():
     return "OK", 200
 
 
-@app.route("/", methods=["GET"])
-@app.route("/webhook", methods=["GET"])
+@app.route("/",            methods=["GET"])
+@app.route("/webhook",     methods=["GET"])
+@app.route("/api/webhook", methods=["GET"])
 def health():
     idx   = _load_index()
     count = len(idx.get("chunks", []))
