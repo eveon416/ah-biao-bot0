@@ -12,3 +12,8 @@ venv/
 
 # vercel
 .vercel/
+
+# node (from previous project)
+node_modules
+dist
+*.log
