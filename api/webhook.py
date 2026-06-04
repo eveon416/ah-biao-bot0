@@ -24,7 +24,7 @@ LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 PINECONE_API_KEY    = os.environ.get("PINECONE_API_KEY", "")
 PINECONE_INDEX_NAME = os.environ.get("PINECONE_INDEX_NAME", "ah-biao-bot")
 LINE_REPLY_URL      = "https://api.line.me/v2/bot/message/reply"
-EMBED_MODEL = "models/gemini-embedding-001"
+EMBED_MODEL_NAME    = "BAAI/bge-small-zh-v1.5"   # 與建索引同一個本地模型
 GEN_MODEL           = "gemini-1.5-flash"
 TOP_K               = 6
 
@@ -40,7 +40,26 @@ def _get_index():
     _pinecone_index = pc.Index(PINECONE_INDEX_NAME)
     return _pinecone_index
 
-# ── Gemini via urllib (no SDK dependency at import time) ──────────────────
+# ── 本地 embedding（fastembed，與建索引一致）─────────────────────────────
+_embed_model = None
+
+def _get_embed_model():
+    global _embed_model
+    if _embed_model is None:
+        from fastembed import TextEmbedding
+        # 模型快取放 /tmp（Vercel 唯一可寫目錄）
+        _embed_model = TextEmbedding(
+            model_name=EMBED_MODEL_NAME,
+            cache_dir="/tmp/fastembed_cache",
+        )
+    return _embed_model
+
+def _embed(text):
+    """用本地模型算 query embedding（bge 會自動加查詢前綴）"""
+    model = _get_embed_model()
+    return list(model.query_embed(text))[0].tolist()
+
+# ── Gemini 生成（urllib，僅用於產生回答）─────────────────────────────────
 def _gemini_post(path, payload):
     url = f"https://generativelanguage.googleapis.com/v1beta/{path}?key={GEMINI_API_KEY}"
     data = json.dumps(payload).encode()
@@ -49,14 +68,6 @@ def _gemini_post(path, payload):
     )
     with urllib.request.urlopen(req, timeout=25) as r:
         return json.loads(r.read())
-
-def _embed(text):
-    resp = _gemini_post(f"{EMBED_MODEL}:embedContent", {
-        "model": EMBED_MODEL,
-        "content": {"parts": [{"text": text}]},
-        "taskType": "RETRIEVAL_QUERY",
-    })
-    return resp["embedding"]["values"]
 
 def _generate(prompt):
     resp = _gemini_post(f"models/{GEN_MODEL}:generateContent", {

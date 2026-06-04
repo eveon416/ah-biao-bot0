@@ -2,13 +2,13 @@
 Build / update Pinecone vector index from Google Drive folder.
 - Recursive scan of all files
 - Skips binary files (images, video, audio, zip)
-- Incremental: only processes files modified since last run
-- Batch embeddings with rate-limit retry
+- Incremental: checkpoint resumes, only processes new/changed files
+- Embeddings computed LOCALLY with fastembed (BAAI/bge-small-zh-v1.5),
+  no external embedding API → no rate limits
 - Upserts vectors to Pinecone
 
 Required env vars:
   GOOGLE_SERVICE_ACCOUNT_JSON
-  GEMINI_API_KEY
   PINECONE_API_KEY
   DRIVE_FOLDER_ID
   PINECONE_INDEX_NAME  (optional, default: ah-biao-bot)
@@ -21,22 +21,21 @@ import time
 import hashlib
 from datetime import datetime, timezone
 
-import google.generativeai as genai
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from pinecone import Pinecone, ServerlessSpec
+from fastembed import TextEmbedding
 
 # ── Config ─────────────────────────────────────────────────────────────────
 DRIVE_FOLDER_ID   = os.environ["DRIVE_FOLDER_ID"]
-GEMINI_API_KEY    = os.environ["GEMINI_API_KEY"]
 PINECONE_API_KEY  = os.environ["PINECONE_API_KEY"]
 INDEX_NAME        = os.environ.get("PINECONE_INDEX_NAME", "ah-biao-bot")
-EMBED_MODEL = "models/gemini-embedding-001"
+EMBED_MODEL_NAME  = "BAAI/bge-small-zh-v1.5"   # 本地中文 embedding 模型
+EMBED_DIM         = 512
 CHUNK_SIZE        = 800
 CHUNK_OVERLAP     = 150
-EMBED_BATCH       = 5
-EMBED_DIM = 3072
+EMBED_BATCH       = 256          # 本地運算，可大批量
 MAX_FILE_MB       = 20   # skip files larger than this
 
 SKIP_MIMES = {
@@ -200,21 +199,20 @@ def chunk_text(text, source, file_id, modified_time):
     return chunks
 
 
-# ── Embeddings ──────────────────────────────────────────────────────────────
-def embed_batch(texts, retries=3):
-    for attempt in range(retries):
-        try:
-            result = genai.embed_content(
-                model=EMBED_MODEL,
-                content=texts,
-                task_type="RETRIEVAL_DOCUMENT",
-            )
-            return result["embedding"]
-        except Exception as e:
-            wait = 10 * (attempt + 1)
-            print(f"  ⚠ Embedding 失敗（{e}），{wait}s 後重試...")
-            time.sleep(wait)
-    raise RuntimeError(f"Embedding 連續失敗 {retries} 次")
+# ── Embeddings（本地 fastembed，無 API 限額）─────────────────────────────────
+_embed_model = None
+
+def get_embed_model():
+    global _embed_model
+    if _embed_model is None:
+        print(f"  載入本地 embedding 模型：{EMBED_MODEL_NAME}（首次會下載約 95MB）")
+        _embed_model = TextEmbedding(model_name=EMBED_MODEL_NAME)
+    return _embed_model
+
+def embed_batch(texts):
+    """本地計算 passage embeddings，回傳 list[list[float]]"""
+    model = get_embed_model()
+    return [emb.tolist() for emb in model.embed(texts, batch_size=EMBED_BATCH)]
 
 
 # ── Pinecone ────────────────────────────────────────────────────────────────
@@ -272,7 +270,6 @@ def save_checkpoint(done: dict):
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 def build_index():
-    genai.configure(api_key=GEMINI_API_KEY)
     pc = Pinecone(api_key=PINECONE_API_KEY)
 
     print("📂 連接 Google Drive...")
@@ -318,14 +315,13 @@ def build_index():
             save_checkpoint(done)
             continue
 
-        print(f"   {len(chunks)} 個片段，產生 embedding...")
+        print(f"   {len(chunks)} 個片段，產生 embedding（本地運算）...")
 
         for j in range(0, len(chunks), EMBED_BATCH):
             batch_chunks = chunks[j:j + EMBED_BATCH]
             texts = [c["text"] for c in batch_chunks]
             embeddings = embed_batch(texts)
             upsert_chunks(index, batch_chunks, embeddings)
-            time.sleep(1.0)   # 每批次間隔 1 秒，避免超過 rate limit
 
         # 標記此檔案已完成
         done[fid] = fmod
