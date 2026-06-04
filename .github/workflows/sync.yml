@@ -2,14 +2,15 @@ name: Daily Knowledge Base Sync
 
 on:
   schedule:
-    - cron: "0 1 * * *"   # 每天 UTC 01:00 (台灣時間 09:00)
-  workflow_dispatch:        # 允許手動觸發
+    - cron: "0 1 * * *"   # 每天 UTC 01:00（台灣時間 09:00）
+  workflow_dispatch:
 
 jobs:
   build-index:
     runs-on: ubuntu-latest
+    timeout-minutes: 300   # 5 小時上限
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout
@@ -21,23 +22,21 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install \
+            google-auth>=2.23.0 \
+            google-api-python-client>=2.108.0 \
+            google-generativeai>=0.7.0 \
+            pypdf>=3.17.0 \
+            python-docx>=1.1.0 \
+            openpyxl>=3.1.0 \
+            pinecone>=3.0.0
 
       - name: Build knowledge base index
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+          GEMINI_API_KEY:              ${{ secrets.GEMINI_API_KEY }}
+          DRIVE_FOLDER_ID:             ${{ secrets.DRIVE_FOLDER_ID }}
+          PINECONE_API_KEY:            ${{ secrets.PINECONE_API_KEY }}
+          PINECONE_INDEX_NAME:         ah-biao-bot
         run: python scripts/build_index.py
-
-      - name: Commit updated index
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/knowledge_base.json
-          if git diff --staged --quiet; then
-            echo "No changes to knowledge base."
-          else
-            git commit -m "chore: update knowledge base index [$(date -u '+%Y-%m-%d %H:%M UTC')]"
-            git push
-          fi
