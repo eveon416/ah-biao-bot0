@@ -25,7 +25,7 @@ PINECONE_API_KEY    = os.environ.get("PINECONE_API_KEY", "")
 PINECONE_INDEX_NAME = os.environ.get("PINECONE_INDEX_NAME", "ah-biao-bot")
 LINE_REPLY_URL      = "https://api.line.me/v2/bot/message/reply"
 EMBED_MODEL_NAME    = "BAAI/bge-small-zh-v1.5"   # 與建索引同一個本地模型
-GEN_MODEL           = "gemini-1.5-flash"
+GEN_MODEL           = "gemini-2.5-flash"
 TOP_K               = 6
 
 # ── Pinecone client (lazy init) ───────────────────────────────────────────
