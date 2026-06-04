@@ -24,7 +24,7 @@ LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 PINECONE_API_KEY    = os.environ.get("PINECONE_API_KEY", "")
 PINECONE_INDEX_NAME = os.environ.get("PINECONE_INDEX_NAME", "ah-biao-bot")
 LINE_REPLY_URL      = "https://api.line.me/v2/bot/message/reply"
-EMBED_MODEL         = "models/text-embedding-004"
+EMBED_MODEL = "models/gemini-embedding-001"
 GEN_MODEL           = "gemini-1.5-flash"
 TOP_K               = 6
 

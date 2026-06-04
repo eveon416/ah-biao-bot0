@@ -32,11 +32,11 @@ DRIVE_FOLDER_ID   = os.environ["DRIVE_FOLDER_ID"]
 GEMINI_API_KEY    = os.environ["GEMINI_API_KEY"]
 PINECONE_API_KEY  = os.environ["PINECONE_API_KEY"]
 INDEX_NAME        = os.environ.get("PINECONE_INDEX_NAME", "ah-biao-bot")
-EMBED_MODEL       = "models/text-embedding-004"
+EMBED_MODEL = "models/gemini-embedding-001"
 CHUNK_SIZE        = 800
 CHUNK_OVERLAP     = 150
 EMBED_BATCH       = 5
-EMBED_DIM         = 768
+EMBED_DIM = 3072
 MAX_FILE_MB       = 20   # skip files larger than this
 
 SKIP_MIMES = {
