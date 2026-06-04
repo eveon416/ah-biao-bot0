@@ -157,8 +157,20 @@ def webhook():
         token = event.get("replyToken", "")
         if not text or not token:
             continue
+
+        # ── 觸發詞過濾：訊息必須包含「阿標」才回應 ──────────────────
+        TRIGGER = "阿標"
+        if TRIGGER not in text:
+            continue  # 沒有觸發詞，靜默忽略
+
+        # 移除觸發詞，取得實際問題
+        question = text.replace(TRIGGER, "").strip(" ,，:：")
+        if not question:
+            _reply(token, "您好！我是阿標，有關採購的問題請直接問我 😊\n例如：阿標 小額採購限額是多少？")
+            continue
+
         try:
-            ans = answer_question(text)
+            ans = answer_question(question)
         except Exception as e:
             ans = f"系統錯誤：{e}"
         _reply(token, ans)
