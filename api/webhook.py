@@ -72,9 +72,17 @@ def _gemini_post(path, payload):
 def _generate(prompt):
     resp = _gemini_post(f"models/{GEN_MODEL}:generateContent", {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1024},
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 2048,
+            "thinkingConfig": {"thinkingBudget": 0},  # 關閉思考，避免吃掉輸出額度、加快速度
+        },
     })
-    return resp["candidates"][0]["content"]["parts"][0]["text"].strip()
+    cand = resp["candidates"][0]
+    # 萬一被截斷，仍盡量取出文字
+    parts = cand.get("content", {}).get("parts", [])
+    text = "".join(p.get("text", "") for p in parts).strip()
+    return text or "抱歉，我這次沒能整理出答案，請再問一次或換個說法。"
 
 # ── RAG ───────────────────────────────────────────────────────────────────
 def answer_question(user_q: str) -> str:
