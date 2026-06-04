@@ -251,6 +251,25 @@ def upsert_chunks(index, chunks, embeddings):
         index.upsert(vectors=vectors[i:i+100])
 
 
+# ── Checkpoint（記錄已處理的檔案，支援斷點續傳）───────────────────────────
+CHECKPOINT_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "checkpoint.json")
+
+def load_checkpoint():
+    """載入已處理的檔案清單 {file_id: modifiedTime}"""
+    path = os.path.abspath(CHECKPOINT_PATH)
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_checkpoint(done: dict):
+    """儲存已處理的檔案清單"""
+    path = os.path.abspath(CHECKPOINT_PATH)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(done, f)
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 def build_index():
     genai.configure(api_key=GEMINI_API_KEY)
@@ -268,17 +287,37 @@ def build_index():
     stats = index.describe_index_stats()
     print(f"   現有向量數：{stats.total_vector_count}")
 
+    # 載入斷點：跳過已處理且未被修改的檔案
+    done = load_checkpoint()
+    skipped = 0
+    for f in files:
+        if done.get(f["id"]) == f.get("modifiedTime"):
+            skipped += 1
+    print(f"   已處理（跳過）：{skipped} 個，待處理：{len(files) - skipped} 個")
+
     total_chunks = 0
     for i, f in enumerate(files, 1):
+        fid  = f["id"]
+        fmod = f.get("modifiedTime", "")
+
+        # 斷點續傳：已處理且未修改 → 跳過
+        if done.get(fid) == fmod:
+            continue
+
         print(f"[{i}/{len(files)}] {f['name']}")
         text = extract_text(drive, f)
         if not text or not text.strip():
             print("   (空白或無法讀取，略過)")
+            done[fid] = fmod
+            save_checkpoint(done)
             continue
 
-        chunks = chunk_text(text, f["name"], f["id"], f.get("modifiedTime", ""))
+        chunks = chunk_text(text, f["name"], fid, fmod)
         if not chunks:
+            done[fid] = fmod
+            save_checkpoint(done)
             continue
+
         print(f"   {len(chunks)} 個片段，產生 embedding...")
 
         for j in range(0, len(chunks), EMBED_BATCH):
@@ -286,10 +325,14 @@ def build_index():
             texts = [c["text"] for c in batch_chunks]
             embeddings = embed_batch(texts)
             upsert_chunks(index, batch_chunks, embeddings)
-            time.sleep(0.3)
+            time.sleep(1.0)   # 每批次間隔 1 秒，避免超過 rate limit
+
+        # 標記此檔案已完成
+        done[fid] = fmod
+        save_checkpoint(done)
 
         total_chunks += len(chunks)
-        print(f"   ✅ 已上傳 {total_chunks} 個片段（累計）")
+        print(f"   ✅ 累計已上傳 {total_chunks} 個片段")
 
     final_stats = index.describe_index_stats()
     print(f"\n🎉 完成！Pinecone 總向量數：{final_stats.total_vector_count}")

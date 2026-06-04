@@ -40,3 +40,15 @@ jobs:
           PINECONE_API_KEY:            ${{ secrets.PINECONE_API_KEY }}
           PINECONE_INDEX_NAME:         ah-biao-bot
         run: python scripts/build_index.py
+
+      - name: Save checkpoint (commit processed file list)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/checkpoint.json
+          if git diff --staged --quiet; then
+            echo "No new files processed."
+          else
+            git commit -m "chore: update index checkpoint [$(date -u '+%Y-%m-%d %H:%M UTC')]"
+            git push
+          fi
