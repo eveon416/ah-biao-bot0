@@ -191,6 +191,13 @@ def webhook():
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
+    # 臨時診斷：?q=問題 → 直接回傳阿標的答案（驗證後移除）
+    q = request.args.get("q", "")
+    if q:
+        try:
+            return answer_question(q), 200
+        except Exception as e:
+            return f"錯誤：{e}", 200
     try:
         idx   = _get_index()
         stats = idx.describe_index_stats()
