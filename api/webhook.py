@@ -26,7 +26,7 @@ PINECONE_INDEX_NAME = os.environ.get("PINECONE_INDEX_NAME", "ah-biao-bot")
 LINE_REPLY_URL      = "https://api.line.me/v2/bot/message/reply"
 EMBED_MODEL_NAME    = "BAAI/bge-small-zh-v1.5"   # 與建索引同一個本地模型
 GEN_MODEL           = "gemini-2.5-flash"
-TOP_K               = 6
+TOP_K               = 8
 
 # ── Pinecone client (lazy init) ───────────────────────────────────────────
 _pinecone_index = None
@@ -199,13 +199,6 @@ def webhook():
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
-    # 臨時診斷：?q=問題 → 直接回傳阿標的答案（驗證後移除）
-    q = request.args.get("q", "")
-    if q:
-        try:
-            return answer_question(q), 200
-        except Exception as e:
-            return f"錯誤：{e}", 200
     try:
         idx   = _get_index()
         stats = idx.describe_index_stats()
