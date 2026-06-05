@@ -21,6 +21,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install OCR tools (tesseract + poppler)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-chi-tra poppler-utils
+
       - name: Install dependencies
         run: |
           pip install \
@@ -30,12 +35,13 @@ jobs:
             python-docx>=1.1.0 \
             openpyxl>=3.1.0 \
             pinecone>=5.0.0 \
-            fastembed>=0.4.0
+            fastembed>=0.4.0 \
+            pytesseract>=0.3.10 \
+            pdf2image>=1.16.0
 
-      - name: Build knowledge base index
+      - name: Build / sync index
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          DRIVE_FOLDER_ID:             ${{ secrets.DRIVE_FOLDER_ID }}
           PINECONE_API_KEY:            ${{ secrets.PINECONE_API_KEY }}
           PINECONE_INDEX_NAME:         ah-biao-bot
         run: python scripts/build_index.py

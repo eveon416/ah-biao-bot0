@@ -42,7 +42,7 @@ _FALLBACK_CONFIG = {
         "key": "採購", "name": "採購", "enabled": True,
         "keywords": ["採購", "招標", "標案", "決標", "底價", "驗收", "履約", "監造", "竣工"],
         "drive_folder_id": "18-aKWluYmR2-A59ATtWb90wFnimpo_Cu",
-        "sheet_tab": "採購", "namespace": "採購",
+        "sheet_tab": "採購", "namespace": "",
     }],
 }
 
@@ -250,6 +250,12 @@ def webhook():
 
         # 業務判斷
         business = detect_business(question)
+        # 記錄到待審核時，把業務關鍵字從問題開頭去掉，讓問題更乾淨
+        log_question = question
+        if business is not None:
+            for kw in business.get("keywords", []):
+                log_question = log_question.replace(kw, "", 1)
+            log_question = log_question.strip(" ,，:：、")
         if business is None:
             names = "、".join(b["name"] for b in BUSINESSES) or "（尚未設定業務）"
             _reply(token, f"請問您要詢問的是哪一個業務呢？目前可詢問：{names}。\n"
@@ -263,9 +269,9 @@ def webhook():
             answer, warns = f"系統錯誤：{e}", ""
         _reply(token, answer)
 
-        # 每題寫入待審核（編號用時間戳）
+        # 每題寫入待審核（編號用時間戳；問題已去除業務關鍵字）
         ts = _now_tw().strftime("%Y%m%d%H%M%S")
-        row = [ts, business["name"], "", question, answer, "", "", "", "待審核", warns]
+        row = [ts, business["name"], "", log_question or question, answer, "", "", "", "待審核", warns]
         _append_review_row(row)
 
     return "OK", 200
