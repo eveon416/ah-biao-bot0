@@ -1,0 +1,34 @@
+{
+  "_comment": "業務類別集中設定。新增業務只需在此加一筆 + 在試算表新增該業務正式分頁 + enabled 設 true。",
+  "faq_sheet_id": "1Co7vSpCJ2NqQ8HLSQIPSg3TIO7R6vqBBX-YbWUCtscw",
+  "review_tab": "待審核",
+  "businesses": [
+    {
+      "key": "採購",
+      "name": "採購",
+      "enabled": true,
+      "keywords": ["採購", "招標", "標案", "決標", "底價", "驗收", "履約", "監造", "竣工"],
+      "drive_folder_id": "18-aKWluYmR2-A59ATtWb90wFnimpo_Cu",
+      "sheet_tab": "採購",
+      "namespace": "採購"
+    },
+    {
+      "key": "出納",
+      "name": "出納",
+      "enabled": false,
+      "keywords": ["出納", "核銷", "請款", "付款", "零用金"],
+      "drive_folder_id": "",
+      "sheet_tab": "出納",
+      "namespace": "出納"
+    },
+    {
+      "key": "檔管",
+      "name": "檔管",
+      "enabled": false,
+      "keywords": ["檔管", "檔案管理", "公文", "歸檔", "點收"],
+      "drive_folder_id": "",
+      "sheet_tab": "檔管",
+      "namespace": "檔管"
+    }
+  ]
+}

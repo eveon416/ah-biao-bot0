@@ -1,6 +1,7 @@
 """
 LINE Bot Webhook — Vercel Serverless Function
-Queries Pinecone for relevant chunks, generates answer with Gemini.
+多業務 RAG：依訊息中的業務關鍵字選擇業務 → 查該業務 namespace → Gemini 生成
+每題寫入「待審核」分頁（含警示標記）。
 """
 
 import base64
@@ -8,8 +9,11 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
+import urllib.parse
 import urllib.request
+from datetime import datetime, timezone, timedelta
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -23,114 +27,175 @@ LINE_ACCESS_TOKEN   = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 PINECONE_API_KEY    = os.environ.get("PINECONE_API_KEY", "")
 PINECONE_INDEX_NAME = os.environ.get("PINECONE_INDEX_NAME", "ah-biao-bot")
+SA_JSON             = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 LINE_REPLY_URL      = "https://api.line.me/v2/bot/message/reply"
-EMBED_MODEL_NAME    = "BAAI/bge-small-zh-v1.5"   # 與建索引同一個本地模型
+EMBED_MODEL_NAME    = "BAAI/bge-small-zh-v1.5"
 GEN_MODEL           = "gemini-2.5-flash"
 TOP_K               = 8
+TRIGGER             = "阿標"
 
-# ── Pinecone client (lazy init) ───────────────────────────────────────────
+# ── 載入業務設定 ─────────────────────────────────────────────────────────────
+_FALLBACK_CONFIG = {
+    "faq_sheet_id": "1Co7vSpCJ2NqQ8HLSQIPSg3TIO7R6vqBBX-YbWUCtscw",
+    "review_tab": "待審核",
+    "businesses": [{
+        "key": "採購", "name": "採購", "enabled": True,
+        "keywords": ["採購", "招標", "標案", "決標", "底價", "驗收", "履約", "監造", "竣工"],
+        "drive_folder_id": "18-aKWluYmR2-A59ATtWb90wFnimpo_Cu",
+        "sheet_tab": "採購", "namespace": "採購",
+    }],
+}
+
+def _load_config():
+    try:
+        with open(os.path.join(ROOT, "businesses.json"), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"businesses.json 讀取失敗，使用內建設定：{e}")
+        return _FALLBACK_CONFIG
+
+_CONFIG = _load_config()
+FAQ_SHEET_ID = _CONFIG.get("faq_sheet_id", "")
+REVIEW_TAB   = _CONFIG.get("review_tab", "待審核")
+BUSINESSES   = [b for b in _CONFIG.get("businesses", []) if b.get("enabled")]
+
+def detect_business(text: str):
+    """從訊息中比對業務關鍵字，回傳對應業務 dict，找不到回 None。"""
+    for b in BUSINESSES:
+        for kw in b.get("keywords", []):
+            if kw in text:
+                return b
+    return None
+
+# ── Pinecone（lazy）─────────────────────────────────────────────────────────
 _pinecone_index = None
-
 def _get_index():
     global _pinecone_index
-    if _pinecone_index is not None:
-        return _pinecone_index
-    from pinecone import Pinecone
-    pc = Pinecone(api_key=PINECONE_API_KEY)
-    _pinecone_index = pc.Index(PINECONE_INDEX_NAME)
+    if _pinecone_index is None:
+        from pinecone import Pinecone
+        _pinecone_index = Pinecone(api_key=PINECONE_API_KEY).Index(PINECONE_INDEX_NAME)
     return _pinecone_index
 
-# ── 本地 embedding（fastembed，與建索引一致）─────────────────────────────
+# ── 本地 embedding（fastembed）──────────────────────────────────────────────
 _embed_model = None
-
 def _get_embed_model():
     global _embed_model
     if _embed_model is None:
         from fastembed import TextEmbedding
-        # 模型快取放 /tmp（Vercel 唯一可寫目錄）
-        _embed_model = TextEmbedding(
-            model_name=EMBED_MODEL_NAME,
-            cache_dir="/tmp/fastembed_cache",
-        )
+        _embed_model = TextEmbedding(model_name=EMBED_MODEL_NAME, cache_dir="/tmp/fastembed_cache")
     return _embed_model
 
 def _embed(text):
-    """用本地模型算 query embedding（bge 會自動加查詢前綴）"""
-    model = _get_embed_model()
-    return list(model.query_embed(text))[0].tolist()
+    return list(_get_embed_model().query_embed(text))[0].tolist()
 
-# ── Gemini 生成（urllib，僅用於產生回答）─────────────────────────────────
+# ── Gemini 生成（urllib）────────────────────────────────────────────────────
 def _gemini_post(path, payload):
     url = f"https://generativelanguage.googleapis.com/v1beta/{path}?key={GEMINI_API_KEY}"
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}
-    )
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=25) as r:
         return json.loads(r.read())
 
 def _generate(prompt):
     resp = _gemini_post(f"models/{GEN_MODEL}:generateContent", {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 2048,
-            "thinkingConfig": {"thinkingBudget": 0},  # 關閉思考，避免吃掉輸出額度、加快速度
-        },
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2048,
+                              "thinkingConfig": {"thinkingBudget": 0}},
     })
     cand = resp["candidates"][0]
-    # 萬一被截斷，仍盡量取出文字
     parts = cand.get("content", {}).get("parts", [])
-    text = "".join(p.get("text", "") for p in parts).strip()
-    return text or "抱歉，我這次沒能整理出答案，請再問一次或換個說法。"
+    return "".join(p.get("text", "") for p in parts).strip()
 
-# ── RAG ───────────────────────────────────────────────────────────────────
-def answer_question(user_q: str) -> str:
-    if not PINECONE_API_KEY:
-        return "系統尚未設定向量資料庫，請聯絡管理員。"
+# ── Google Sheets 寫入（service account）───────────────────────────────────
+def _sheets_token():
+    from google.oauth2 import service_account
+    import google.auth.transport.requests
+    info = json.loads(SA_JSON)
+    creds = service_account.Credentials.from_service_account_info(
+        info, scopes=["https://www.googleapis.com/auth/spreadsheets"])
+    creds.refresh(google.auth.transport.requests.Request())
+    return creds.token
 
+def _append_review_row(row_values):
+    """把一列資料 append 到待審核分頁。"""
+    if not (SA_JSON and FAQ_SHEET_ID):
+        return
     try:
-        query_vec = _embed(user_q)
+        token = _sheets_token()
+        rng = urllib.parse.quote(f"{REVIEW_TAB}!A1")
+        url = (f"https://sheets.googleapis.com/v4/spreadsheets/{FAQ_SHEET_ID}"
+               f"/values/{rng}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS")
+        body = json.dumps({"values": [row_values]}).encode()
+        req = urllib.request.Request(url, data=body, method="POST",
+              headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10)
     except Exception as e:
-        return f"查詢時發生錯誤：{e}"
+        print(f"待審核寫入失敗：{e}")
 
+# ── 警示偵測 ─────────────────────────────────────────────────────────────────
+_SELF_HELP_RE = re.compile(r"請洽|請自行|請詢問|請聯[絡繫]|建議您?查|建議您?洽|洽詢|自行(查|洽)|請參閱|請查閱|洽承辦")
+
+def compute_warnings(answer: str, matches, name_flag: bool) -> str:
+    warns = []
+    if name_flag:
+        warns.append("需改職稱")
+    if _SELF_HELP_RE.search(answer or ""):
+        warns.append("需修正")
+    for m in matches:
+        md = m.get("metadata", {})
+        if md.get("source_type") == "faq" and m.get("score", 0) > 0.85:
+            warns.append("疑似重複")
+            break
+    return "、".join(warns)
+
+# ── RAG 主流程 ────────────────────────────────────────────────────────────────
+def answer_for_business(business, question):
+    """回傳 (使用者答案, 警示字串)。"""
+    ns = business.get("namespace", "")
     try:
-        index = _get_index()
-        results = index.query(
-            vector=query_vec,
-            top_k=TOP_K,
-            include_metadata=True,
-        )
-        matches = results.get("matches", [])
+        qvec = _embed(question)
     except Exception as e:
-        return f"資料庫查詢失敗：{e}"
+        return f"查詢時發生錯誤：{e}", ""
 
-    # Filter low-score matches
+    matches = []
+    try:
+        idx = _get_index()
+        res = idx.query(vector=qvec, top_k=TOP_K, include_metadata=True, namespace=ns)
+        matches = res.get("matches", [])
+        # namespace 尚未建好時（移轉期）退回預設 namespace
+        if not matches and ns:
+            res = idx.query(vector=qvec, top_k=TOP_K, include_metadata=True, namespace="")
+            matches = res.get("matches", [])
+    except Exception as e:
+        return f"資料庫查詢失敗：{e}", ""
+
     relevant = [m for m in matches if m.get("score", 0) > 0.3]
     if not relevant:
-        return "知識庫中找不到相關的採購資料，請換個方式提問或確認文件是否已建立索引。"
+        ans = f"我在「{business['name']}」的資料中找不到相關內容，請換個方式提問，或確認文件／FAQ 是否已收錄。"
+        return ans, ""
 
-    ctx_parts = []
-    for m in relevant:
-        meta = m.get("metadata", {})
-        source = meta.get("source", "未知來源")
-        text   = meta.get("text", "")
-        ctx_parts.append(f"【{source}】\n{text}")
-    context = "\n\n---\n\n".join(ctx_parts)
+    ctx = "\n\n---\n\n".join(
+        f"【{m.get('metadata',{}).get('source','來源')}】\n{m.get('metadata',{}).get('text','')}"
+        for m in relevant)
 
     prompt = (
-        "你是花衛局採購業務助理，只根據以下採購相關資料回答問題。\n"
-        "若資料中找不到答案，請明確說明。回答請使用繁體中文，語氣親切專業。\n\n"
-        f"參考資料：\n{context}\n\n"
-        f"問題：{user_q}\n\n回答："
+        f"你是花蓮縣衛生局「{business['name']}」業務助理，只根據以下資料回答問題。\n"
+        "若資料中找不到答案，請明確說明，不要編造。回答用繁體中文，語氣親切專業。\n"
+        "規則：若你的回答中提到『具體人名』（例如某承辦人姓名，而非單位或職稱），"
+        "請在整則回答的最後另起一行，單獨輸出標記 [HASNAME]；若沒有人名則不要輸出該標記。\n\n"
+        f"參考資料：\n{ctx}\n\n問題：{question}\n\n回答："
     )
-
     try:
-        return _generate(prompt)
+        raw = _generate(prompt)
     except Exception as e:
-        return f"生成回答時發生錯誤：{e}"
+        return f"生成回答時發生錯誤：{e}", ""
 
-# ── LINE Bot ──────────────────────────────────────────────────────────────
+    name_flag = "[HASNAME]" in raw
+    answer = raw.replace("[HASNAME]", "").strip()
+    warns = compute_warnings(answer, relevant, name_flag)
+    return answer, warns
+
+# ── LINE ─────────────────────────────────────────────────────────────────────
 def _verify_sig(body: bytes, sig: str) -> bool:
     if not LINE_CHANNEL_SECRET:
         return True
@@ -138,22 +203,20 @@ def _verify_sig(body: bytes, sig: str) -> bool:
     return hmac.compare_digest(base64.b64encode(mac).decode(), sig)
 
 def _reply(token: str, text: str):
-    payload = json.dumps({
-        "replyToken": token,
-        "messages": [{"type": "text", "text": text[:5000]}],
-    }).encode()
-    req = urllib.request.Request(
-        LINE_REPLY_URL, data=payload,
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {LINE_ACCESS_TOKEN}"},
-        method="POST",
-    )
+    payload = json.dumps({"replyToken": token,
+                          "messages": [{"type": "text", "text": text[:5000]}]}).encode()
+    req = urllib.request.Request(LINE_REPLY_URL, data=payload, method="POST",
+          headers={"Content-Type": "application/json",
+                   "Authorization": f"Bearer {LINE_ACCESS_TOKEN}"})
     try:
         urllib.request.urlopen(req, timeout=10)
     except Exception as e:
         print(f"LINE reply error: {e}")
 
-# ── Flask routes ──────────────────────────────────────────────────────────
+def _now_tw():
+    return datetime.now(timezone(timedelta(hours=8)))
+
+# ── 路由 ─────────────────────────────────────────────────────────────────────
 @app.route("/api/webhook", methods=["POST"])
 @app.route("/webhook",     methods=["POST"])
 @app.route("/",            methods=["POST"])
@@ -166,6 +229,7 @@ def webhook():
         payload = json.loads(body)
     except Exception:
         abort(400, "Bad JSON")
+
     for event in payload.get("events", []):
         if event.get("type") != "message":
             continue
@@ -176,23 +240,34 @@ def webhook():
         token = event.get("replyToken", "")
         if not text or not token:
             continue
-
-        # ── 觸發詞過濾：訊息必須包含「阿標」才回應 ──────────────────
-        TRIGGER = "阿標"
         if TRIGGER not in text:
-            continue  # 沒有觸發詞，靜默忽略
-
-        # 移除觸發詞，取得實際問題
-        question = text.replace(TRIGGER, "").strip(" ,，:：")
-        if not question:
-            _reply(token, "您好！我是阿標，有關採購的問題請直接問我 😊\n例如：阿標 小額採購限額是多少？")
             continue
 
+        question = text.replace(TRIGGER, "").strip(" ,，:：")
+        if not question:
+            _reply(token, "您好！我是阿標。請在訊息中說明業務別並提問，例如：\n「阿標 採購 小額採購限額多少？」")
+            continue
+
+        # 業務判斷
+        business = detect_business(question)
+        if business is None:
+            names = "、".join(b["name"] for b in BUSINESSES) or "（尚未設定業務）"
+            _reply(token, f"請問您要詢問的是哪一個業務呢？目前可詢問：{names}。\n"
+                          f"例如：「阿標 採購 …」")
+            continue
+
+        # 回答
         try:
-            ans = answer_question(question)
+            answer, warns = answer_for_business(business, question)
         except Exception as e:
-            ans = f"系統錯誤：{e}"
-        _reply(token, ans)
+            answer, warns = f"系統錯誤：{e}", ""
+        _reply(token, answer)
+
+        # 每題寫入待審核（編號用時間戳）
+        ts = _now_tw().strftime("%Y%m%d%H%M%S")
+        row = [ts, business["name"], "", question, answer, "", "", "", "待審核", warns]
+        _append_review_row(row)
+
     return "OK", 200
 
 @app.route("/",            methods=["GET"])
@@ -200,10 +275,12 @@ def webhook():
 @app.route("/api/webhook", methods=["GET"])
 def health():
     try:
-        idx   = _get_index()
+        idx = _get_index()
         stats = idx.describe_index_stats()
-        count = stats.total_vector_count
-        status = f"✅ LINE Bot RAG 運行中\n向量數：{count:,}\n資料來源：採購-Antigravity"
+        ns_info = stats.get("namespaces", {}) if isinstance(stats, dict) else {}
+        biz = "、".join(b["name"] for b in BUSINESSES)
+        return (f"✅ 阿標多業務 RAG 運行中\n啟用業務：{biz}\n"
+                f"向量總數：{stats.get('total_vector_count', '?')}\n"
+                f"namespaces：{list(ns_info.keys())}"), 200
     except Exception as e:
-        status = f"⚠️ Pinecone 連線失敗：{e}"
-    return status, 200
+        return f"⚠️ 狀態檢查失敗：{e}", 200
