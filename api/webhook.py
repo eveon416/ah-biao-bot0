@@ -149,65 +149,80 @@ def compute_warnings(answer: str, matches, name_flag: bool) -> str:
             break
     return "、".join(warns)
 
-# ── RAG 主流程 ────────────────────────────────────────────────────────────────
+# ── RAG 主流程（FAQ 用語意比對，不靠關鍵字門檻）────────────────────────────────
+FAQ_CAND_K  = 12     # FAQ 候選數（給語意比對挑）
+DOC_CAND_K  = 6
+FAQ_CAND_MIN_SCORE = 0.35   # 候選門檻放寬，由 AI 判斷語意是否真的對得上
+
+def _query(idx, qvec, ns, k, source_type):
+    res = idx.query(vector=qvec, top_k=k, include_metadata=True, namespace=ns,
+                    filter={"source_type": {"$eq": source_type}})
+    return res.get("matches", [])
+
 def answer_for_business(business, question):
-    """回傳 (使用者答案, 警示字串)。"""
+    """回傳 (使用者答案, 警示字串)。FAQ 以語意比對優先。"""
     ns = business.get("namespace", "")
     try:
         qvec = _embed(question)
     except Exception as e:
         return f"查詢時發生錯誤：{e}", ""
 
-    matches = []
     try:
         idx = _get_index()
-        res = idx.query(vector=qvec, top_k=TOP_K, include_metadata=True, namespace=ns)
-        matches = res.get("matches", [])
-        # namespace 尚未建好時（移轉期）退回預設 namespace
-        if not matches and ns:
-            res = idx.query(vector=qvec, top_k=TOP_K, include_metadata=True, namespace="")
-            matches = res.get("matches", [])
+        faq_cands = _query(idx, qvec, ns, FAQ_CAND_K, "faq")
+        doc_cands = _query(idx, qvec, ns, DOC_CAND_K, "doc")
     except Exception as e:
         return f"資料庫查詢失敗：{e}", ""
 
-    # ── FAQ 優先：問題與某條已審查 FAQ 高度相符 → 直接採用該 FAQ 答案 ──────
-    faq_matches = [m for m in matches
-                   if m.get("metadata", {}).get("source_type") == "faq"]
-    if faq_matches:
-        top_faq = max(faq_matches, key=lambda m: m.get("score", 0))
-        if top_faq.get("score", 0) >= FAQ_DIRECT_THRESHOLD:
-            md = top_faq.get("metadata", {})
-            faq_ans = md.get("faq_answer", "")
-            if not faq_ans:  # 舊向量沒存答案 → 從 text 退而求其次
-                txt = md.get("text", "")
-                faq_ans = txt.split("答：", 1)[-1].strip() if "答：" in txt else txt
-            if faq_ans:
-                return faq_ans, "命中FAQ"
+    faq_cands = [m for m in faq_cands if m.get("score", 0) > FAQ_CAND_MIN_SCORE]
+    doc_cands = [m for m in doc_cands if m.get("score", 0) > 0.3]
 
-    relevant = [m for m in matches if m.get("score", 0) > 0.3]
-    if not relevant:
-        ans = f"我在「{business['name']}」的資料中找不到相關內容，請換個方式提問，或確認文件／FAQ 是否已收錄。"
-        return ans, ""
+    if not faq_cands and not doc_cands:
+        return (f"我在「{business['name']}」的資料中找不到相關內容，"
+                "請換個方式提問，或確認文件／FAQ 是否已收錄。"), ""
 
-    ctx = "\n\n---\n\n".join(
-        f"【{m.get('metadata',{}).get('source','來源')}】\n{m.get('metadata',{}).get('text','')}"
-        for m in relevant)
+    # 組合提示：先列 FAQ 候選（問題），再列文件
+    faq_block = "\n".join(
+        f"[FAQ {i+1}] {m.get('metadata',{}).get('faq_question','')}"
+        for i, m in enumerate(faq_cands)) or "（無）"
+    doc_block = "\n\n---\n\n".join(
+        f"【{m.get('metadata',{}).get('source','文件')}】\n{m.get('metadata',{}).get('text','')}"
+        for m in doc_cands) or "（無）"
 
     prompt = (
-        f"你是花蓮縣衛生局「{business['name']}」業務助理，只根據以下資料回答問題。\n"
-        "若資料中找不到答案，請明確說明，不要編造。回答用繁體中文，語氣親切專業。\n"
-        "規則：若你的回答中提到『具體人名』（例如某承辦人姓名，而非單位或職稱），"
-        "請在整則回答的最後另起一行，單獨輸出標記 [HASNAME]；若沒有人名則不要輸出該標記。\n\n"
-        f"參考資料：\n{ctx}\n\n問題：{question}\n\n回答："
+        f"你是花蓮縣衛生局「{business['name']}」業務助理。\n"
+        "請依以下步驟回答使用者問題：\n"
+        "步驟1：判斷下列「候選FAQ」中，是否有某一條問的是『與使用者同一件事』"
+        "（用詞不同沒關係，只要核心問題相同）。\n"
+        "  → 若有，整則回覆「只能輸出一行」：USE_FAQ:編號（例如 USE_FAQ:3），不要有其他任何字。\n"
+        "  → 若沒有任何一條對得上，進行步驟2。\n"
+        "步驟2：只根據下列「文件內容」回答，用繁體中文、語氣親切專業；"
+        "找不到就說明，不要編造。若回答中出現具體人名（非單位或職稱），"
+        "在最後另起一行單獨輸出 [HASNAME]。\n\n"
+        f"使用者問題：{question}\n\n候選FAQ：\n{faq_block}\n\n文件內容：\n{doc_block}\n\n回覆："
     )
     try:
         raw = _generate(prompt)
     except Exception as e:
         return f"生成回答時發生錯誤：{e}", ""
 
+    # 命中 FAQ → 直接回傳該 FAQ 的標準答案（逐字）
+    mfaq = re.search(r"USE_FAQ:\s*(\d+)", raw)
+    if mfaq:
+        i = int(mfaq.group(1)) - 1
+        if 0 <= i < len(faq_cands):
+            md = faq_cands[i].get("metadata", {})
+            ans = md.get("faq_answer", "")
+            if not ans:
+                txt = md.get("text", "")
+                ans = txt.split("答：", 1)[-1].strip() if "答：" in txt else txt
+            if ans:
+                return ans, "命中FAQ"
+
+    # 否則為文件重組答案
     name_flag = "[HASNAME]" in raw
     answer = raw.replace("[HASNAME]", "").strip()
-    warns = compute_warnings(answer, relevant, name_flag)
+    warns = compute_warnings(answer, doc_cands, name_flag)
     return answer, warns
 
 # ── LINE ─────────────────────────────────────────────────────────────────────
