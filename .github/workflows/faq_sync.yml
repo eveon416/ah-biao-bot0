@@ -1,0 +1,29 @@
+name: FAQ Quick Sync
+
+# 只同步並索引「已審查」FAQ（不碰文件、不跑 OCR），約 2 分鐘。
+on:
+  workflow_dispatch:
+
+jobs:
+  faq-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install minimal deps
+        run: |
+          pip install \
+            google-auth>=2.23.0 \
+            google-api-python-client>=2.108.0 \
+            pinecone>=5.0.0 \
+            fastembed>=0.4.0
+      - name: FAQ-only sync
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          PINECONE_API_KEY:            ${{ secrets.PINECONE_API_KEY }}
+          PINECONE_INDEX_NAME:         ah-biao-bot
+          FAQ_ONLY:                    "1"
+        run: python scripts/build_index.py

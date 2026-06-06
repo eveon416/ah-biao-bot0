@@ -33,6 +33,7 @@ EMBED_MODEL_NAME    = "BAAI/bge-small-zh-v1.5"
 GEN_MODEL           = "gemini-2.5-flash"
 TOP_K               = 8
 TRIGGER             = "阿標"
+FAQ_DIRECT_THRESHOLD = 0.82   # 問題與已審查 FAQ 相似度 ≥ 此值 → 直接採用 FAQ 答案
 
 # ── 載入業務設定 ─────────────────────────────────────────────────────────────
 _FALLBACK_CONFIG = {
@@ -168,6 +169,20 @@ def answer_for_business(business, question):
             matches = res.get("matches", [])
     except Exception as e:
         return f"資料庫查詢失敗：{e}", ""
+
+    # ── FAQ 優先：問題與某條已審查 FAQ 高度相符 → 直接採用該 FAQ 答案 ──────
+    faq_matches = [m for m in matches
+                   if m.get("metadata", {}).get("source_type") == "faq"]
+    if faq_matches:
+        top_faq = max(faq_matches, key=lambda m: m.get("score", 0))
+        if top_faq.get("score", 0) >= FAQ_DIRECT_THRESHOLD:
+            md = top_faq.get("metadata", {})
+            faq_ans = md.get("faq_answer", "")
+            if not faq_ans:  # 舊向量沒存答案 → 從 text 退而求其次
+                txt = md.get("text", "")
+                faq_ans = txt.split("答：", 1)[-1].strip() if "答：" in txt else txt
+            if faq_ans:
+                return faq_ans, "命中FAQ"
 
     relevant = [m for m in matches if m.get("score", 0) > 0.3]
     if not relevant:

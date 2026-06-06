@@ -262,11 +262,13 @@ def get_index(pc):
 def upsert(index, namespace, items, embeddings, source_type):
     vectors = []
     for it, emb in zip(items, embeddings):
-        vectors.append({"id": it["id"], "values": emb, "metadata": {
+        md = {
             "source": it["source"], "text": it["text"][:900],
             "source_type": source_type,
             "file_id": it.get("file_id", ""), "chunk_idx": it.get("chunk_idx", 0),
-        }})
+        }
+        md.update(it.get("meta_extra", {}))   # FAQ 額外帶 faq_answer / faq_question
+        vectors.append({"id": it["id"], "values": emb, "metadata": md})
     for i in range(0, len(vectors), 100):
         index.upsert(vectors=vectors[i:i+100], namespace=namespace)
 
@@ -338,6 +340,7 @@ def index_faq(index, business):
         items.append({
             "id": f"faq-{ns}-" + hashlib.md5((num or q).encode()).hexdigest(),
             "text": f"問：{q}\n答：{a}", "source": f"FAQ：{q}",
+            "meta_extra": {"faq_answer": a[:3000], "faq_question": q[:500]},
         })
     if items:
         for j in range(0, len(items), EMBED_BATCH):
@@ -353,19 +356,27 @@ def main():
     drive = drive_service()
     done = load_ckpt()
 
+    faq_only = os.environ.get("FAQ_ONLY", "") == "1"
+
     for b in BUSINESSES:
         print(f"\n=== 業務：{b['name']}（namespace={b['namespace']}）===")
+        # 1) 先同步已審查 FAQ → 正式分頁
         try:
             promote_reviewed(b)
         except Exception as e:
             print(f"  ⚠ 同步已審查失敗：{e}")
-        n_doc = index_drive(index, b, drive, done)
+        # 2) 先索引 FAQ（快、最高優先，不必等文件）
         try:
             n_faq = index_faq(index, b)
         except Exception as e:
             n_faq = 0
             print(f"  ⚠ FAQ 索引失敗：{e}")
-        print(f"  ✅ {b['name']}：文件片段 +{n_doc}，FAQ {n_faq} 筆")
+        # 3) FAQ_ONLY 模式：略過耗時的文件索引
+        if faq_only:
+            print(f"  ✅ {b['name']}（FAQ_ONLY）：FAQ {n_faq} 筆")
+            continue
+        n_doc = index_drive(index, b, drive, done)
+        print(f"  ✅ {b['name']}：FAQ {n_faq} 筆，文件片段 +{n_doc}")
 
     stats = index.describe_index_stats()
     print(f"\n🎉 完成！總向量數：{stats.total_vector_count}")
