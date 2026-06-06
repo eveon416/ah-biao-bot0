@@ -56,5 +56,10 @@ jobs:
             echo "No new files processed."
           else
             git commit -m "chore: update index checkpoint [$(date -u '+%Y-%m-%d %H:%M UTC')]"
-            git push
+            # 重建期間 remote 可能已有新 commit → 先 rebase 再 push，避免衝突失敗
+            for attempt in 1 2 3; do
+              git pull --rebase --autostash origin main && git push origin main && break
+              echo "push 衝突，重試 $attempt ..."
+              sleep 5
+            done
           fi
