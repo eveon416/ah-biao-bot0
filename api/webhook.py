@@ -284,10 +284,12 @@ def webhook():
             answer, warns = f"系統錯誤：{e}", ""
         _reply(token, answer)
 
-        # 每題寫入待審核（編號用時間戳；問題已去除業務關鍵字）
-        ts = _now_tw().strftime("%Y%m%d%H%M%S")
-        row = [ts, business["name"], "", log_question or question, answer, "", "", "", "待審核", warns]
-        _append_review_row(row)
+        # 命中既有 FAQ → 已涵蓋，不重複寫入待審核（避免灌爆）
+        # 其餘（RAG 重組的答案）才寫入待審核，供你日後決定是否收錄
+        if warns != "命中FAQ":
+            ts = _now_tw().strftime("%Y%m%d%H%M%S")
+            row = [ts, business["name"], "", log_question or question, answer, "", "", "", "待審核", warns]
+            _append_review_row(row)
 
     return "OK", 200
 
