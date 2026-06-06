@@ -226,10 +226,11 @@ def chunk_text(text, source, file_id, modified, namespace):
     if not text:
         return []
     out, start, idx = [], 0, 0
+    prefix = f"{namespace}:" if namespace else ""   # 預設 namespace 用舊 ID 規則 → 覆蓋而非重複
     while start < len(text):
         end = min(start + CHUNK_SIZE, len(text))
         out.append({
-            "id": hashlib.md5(f"{namespace}:{file_id}:{idx}".encode()).hexdigest(),
+            "id": hashlib.md5(f"{prefix}{file_id}:{idx}".encode()).hexdigest(),
             "text": text[start:end], "source": source,
             "file_id": file_id, "modified": modified, "chunk_idx": idx,
         })
