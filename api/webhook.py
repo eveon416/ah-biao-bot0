@@ -184,68 +184,116 @@ def get_all_faq(business):
     _FAQ_CACHE[key] = (_time.time(), faqs)
     return faqs
 
-def match_faq(question, faqs):
-    """把全部 FAQ 問題交給 Gemini 判斷語意，回傳命中索引或 -1。"""
-    if not faqs:
-        return -1
-    listing = "\n".join(f"{i+1}. {f['q']}" for i, f in enumerate(faqs))
+def match_and_rewrite(question, faqs):
+    """一次呼叫完成：FAQ 語意比對 + 查詢改寫。
+    回傳 (relation, faq_index, rewritten_query)；relation ∈ EXACT/RELATED/NONE。"""
+    listing = "\n".join(f"{i+1}. {f['q']}" for i, f in enumerate(faqs)) if faqs else "（無）"
     prompt = (
-        "以下是已審核的 FAQ 問題清單。請判斷『使用者問題』是否與其中某一條"
-        "問的是同一件事（用詞、語氣不同沒關係，只要核心想問的相同即可）。\n"
-        "若有相符，只輸出一行：USE_FAQ:編號（例如 USE_FAQ:7）。\n"
-        "若沒有任何一條真正相符，只輸出：NONE。\n"
-        "不要輸出其他任何文字。\n\n"
-        f"使用者問題：{question}\n\nFAQ 問題清單：\n{listing}"
+        "你是檢索助理。根據下列『已審核FAQ清單』與『使用者問題』，輸出恰好兩行：\n"
+        "第1行 MATCH：判斷使用者問題與FAQ的關係——\n"
+        "  • 與某條FAQ問的是完全同一件事 → 輸出 EXACT:編號\n"
+        "  • 與某條FAQ相關，但使用者問得更廣或想知道更多 → 輸出 RELATED:編號\n"
+        "  • 都不相關 → 輸出 NONE\n"
+        "第2行 QUERY：把使用者問題改寫成適合搜尋內部文件的正式關鍵問句（一句話）。\n"
+        "只輸出這兩行，格式範例：\nMATCH: RELATED:7\nQUERY: 小額採購的驗收程序與應備文件\n\n"
+        f"使用者問題：{question}\n\nFAQ清單：\n{listing}"
     )
     try:
         out = _generate(prompt)
     except Exception as e:
-        print(f"FAQ 比對失敗：{e}")
-        return -1
-    m = re.search(r"USE_FAQ:\s*(\d+)", out)
-    if m:
-        i = int(m.group(1)) - 1
-        if 0 <= i < len(faqs):
-            return i
-    return -1
+        print(f"比對/改寫失敗：{e}")
+        return "NONE", -1, question
+    rel, idx = "NONE", -1
+    mm = re.search(r"MATCH:\s*(EXACT|RELATED|NONE)(?::\s*(\d+))?", out, re.I)
+    if mm:
+        rel = mm.group(1).upper()
+        if mm.group(2):
+            i = int(mm.group(2)) - 1
+            if 0 <= i < len(faqs):
+                idx = i
+        if rel in ("EXACT", "RELATED") and idx < 0:
+            rel = "NONE"
+    qm = re.search(r"QUERY:\s*(.+)", out)
+    rquery = qm.group(1).strip() if qm else question
+    return rel, idx, (rquery or question)
+
+def _doc_sources(doc_cands, limit=3):
+    seen, out = set(), []
+    for m in doc_cands:
+        s = m.get("metadata", {}).get("source", "")
+        if s and s not in seen:
+            seen.add(s); out.append(s)
+        if len(out) >= limit:
+            break
+    return out
 
 def answer_for_business(business, question):
-    """回傳 (使用者答案, 警示字串)。先用全 FAQ 語意比對，命中即用標準答案。"""
-    # 1) FAQ 優先（全部 FAQ 交給 AI 判斷，保證不漏接）
+    """三段式：EXACT→逐字FAQ；RELATED→FAQ為準+文件補充；NONE→純文件。附來源。"""
     faqs = get_all_faq(business)
+    rel, fi, rquery = "NONE", -1, question
     if faqs and len(faqs) <= FAQ_MATCH_MAX:
-        hit = match_faq(question, faqs)
-        if hit >= 0:
-            return faqs[hit]["a"], "命中FAQ"
+        rel, fi, rquery = match_and_rewrite(question, faqs)
 
-    # 2) 沒命中 FAQ → 用文件 RAG 回答
+    # ① EXACT：完全同一問題 → 逐字回標準答案（一致、可控）
+    if rel == "EXACT" and fi >= 0:
+        return faqs[fi]["a"].rstrip() + "\n\n（來源：本局採購 FAQ）", "命中FAQ"
+
+    # 取文件（用改寫後的查詢，檢索更準）
     ns = business.get("namespace", "")
+    doc_cands = []
     try:
-        qvec = _embed(question)
+        qvec = _embed(rquery)
         idx = _get_index()
         doc_cands = _query_docs(idx, qvec, ns, DOC_CAND_K)
     except Exception as e:
+        if rel == "RELATED" and fi >= 0:
+            return faqs[fi]["a"].rstrip() + "\n\n（來源：本局採購 FAQ）", "命中FAQ"
         return f"查詢時發生錯誤：{e}", ""
 
-    if not doc_cands:
-        return (f"我在「{business['name']}」的資料中找不到相關內容，"
-                "請換個方式提問，或確認文件／FAQ 是否已收錄。"), ""
+    faq_ctx = ""
+    if rel == "RELATED" and fi >= 0:
+        faq_ctx = ("【已審核標準答案（權威，必須以此為準，不可牴觸）】\n"
+                   f"問：{faqs[fi]['q']}\n答：{faqs[fi]['a']}\n\n")
 
-    ctx = "\n\n---\n\n".join(
+    # ③ 完全沒料 → 未解答（建議洽承辦，並會記錄到待審核供補FAQ）
+    if not doc_cands and not faq_ctx:
+        return ("這個問題我在現有資料中找不到答案 😥\n建議您洽詢採購承辦人確認。"
+                "（您的問題已記錄，將供日後補充進知識庫）"), "未解答"
+
+    doc_block = "\n\n---\n\n".join(
         f"【{m.get('metadata',{}).get('source','文件')}】\n{m.get('metadata',{}).get('text','')}"
-        for m in doc_cands)
+        for m in doc_cands) or "（無相關文件）"
+
+    if faq_ctx:   # ② RELATED：以FAQ為準 + 文件補充，綜合回答
+        instr = ("請『以下列標準答案為準』，並用文件內容補充更完整的說明"
+                 "（補充不可牴觸標準答案）。")
+    else:         # NONE：純文件
+        instr = "請只根據下列文件內容回答。"
+
     prompt = (
-        f"你是花蓮縣衛生局「{business['name']}」業務助理，只根據以下文件回答問題。\n"
-        "若文件中找不到答案，請明確說明，不要編造。回答用繁體中文，語氣親切專業。\n"
+        f"你是花蓮縣衛生局「{business['name']}」業務助理。{instr}\n"
+        "用繁體中文、語氣親切專業。若標準答案與文件都無法回答，"
+        "最後另起一行單獨輸出 [NOTFOUND]。\n"
         "若回答中出現具體人名（非單位或職稱），最後另起一行單獨輸出 [HASNAME]。\n\n"
-        f"文件內容：\n{ctx}\n\n問題：{question}\n\n回答："
+        f"{faq_ctx}文件內容：\n{doc_block}\n\n問題：{question}\n\n回答："
     )
     try:
         raw = _generate(prompt)
     except Exception as e:
         return f"生成回答時發生錯誤：{e}", ""
+
+    if "[NOTFOUND]" in raw:
+        return ("這個問題我在現有資料中找不到完整答案 😥\n建議您洽詢採購承辦人確認。"
+                "（您的問題已記錄，將供日後補充進知識庫）"), "未解答"
+
     name_flag = "[HASNAME]" in raw
-    answer = raw.replace("[HASNAME]", "").strip()
+    answer = raw.replace("[HASNAME]", "").replace("[NOTFOUND]", "").strip()
+
+    # 來源標註
+    cites = (["採購FAQ"] if faq_ctx else []) + _doc_sources(doc_cands)
+    if cites:
+        answer += "\n\n（依據：" + "、".join(cites) + "）"
+
     warns = compute_warnings(answer, doc_cands, name_flag)
     return answer, warns
 
