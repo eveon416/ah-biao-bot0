@@ -89,6 +89,10 @@ def _get_embed_model():
 def _embed(text):
     return list(_get_embed_model().query_embed(text))[0].tolist()
 
+def _embed_many(texts):
+    """一次批次 embedding 多個查詢，降低延遲。"""
+    return [v.tolist() for v in _get_embed_model().query_embed(texts)]
+
 # ── Gemini 生成（urllib）────────────────────────────────────────────────────
 def _gemini_post(path, payload):
     url = f"https://generativelanguage.googleapis.com/v1beta/{path}?key={GEMINI_API_KEY}"
@@ -258,14 +262,10 @@ def fetch_full_doc(idx, ns, file_id):
         print(f"還原完整文件失敗：{e}")
         return "", ""
 
-def _multi_query_docs(idx, queries, ns, k_each=6):
-    """多查詢擴展：每個查詢變體各檢索，合併去重，取分數最高的一批。"""
-    best = {}   # id -> match（保留最高分）
-    for q in queries:
-        try:
-            qv = _embed(q)
-        except Exception:
-            continue
+def _multi_query_docs(idx, qvecs, ns, k_each=6):
+    """多查詢擴展：用預先算好的查詢向量各檢索，合併去重，取分數最高的一批。"""
+    best = {}
+    for qv in qvecs:
         for m in _query_docs(idx, qv, ns, k_each):
             mid = m.get("id")
             if mid not in best or m.get("score", 0) > best[mid].get("score", 0):
@@ -286,9 +286,11 @@ def answer_for_business(business, question):
     # 多查詢擴展檢索（撒更廣的網，提升通識/綜覽問題召回）
     ns = business.get("namespace", "")
     doc_cands = []
+    qvecs = []
     try:
         idx = _get_index()
-        doc_cands = _multi_query_docs(idx, queries, ns)
+        qvecs = _embed_many(queries)          # 一次批次算好，文件+大綱共用
+        doc_cands = _multi_query_docs(idx, qvecs, ns)
     except Exception as e:
         if rel == "RELATED" and fi >= 0:
             return faqs[fi]["a"].rstrip() + "\n\n（來源：本局採購 FAQ）", "命中FAQ"
@@ -307,8 +309,7 @@ def answer_for_business(business, question):
     # 大綱索引：若某教學檔的「大綱」命中，優先還原該檔（綜覽問題召回更強）
     outline_fids = []
     try:
-        for q in queries[:2]:
-            ov = _embed(q)
+        for ov in qvecs[:2]:
             ores = idx.query(vector=ov, top_k=3, include_metadata=True, namespace=ns,
                              filter={"source_type": {"$eq": "outline"}})
             for m in ores.get("matches", []):
