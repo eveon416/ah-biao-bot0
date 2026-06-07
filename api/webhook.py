@@ -185,24 +185,26 @@ def get_all_faq(business):
     return faqs
 
 def match_and_rewrite(question, faqs):
-    """一次呼叫完成：FAQ 語意比對 + 查詢改寫。
-    回傳 (relation, faq_index, rewritten_query)；relation ∈ EXACT/RELATED/NONE。"""
+    """一次呼叫完成：FAQ 語意比對 + 多查詢擴展。
+    回傳 (relation, faq_index, [查詢變體])；relation ∈ EXACT/RELATED/NONE。"""
     listing = "\n".join(f"{i+1}. {f['q']}" for i, f in enumerate(faqs)) if faqs else "（無）"
     prompt = (
-        "你是檢索助理。根據下列『已審核FAQ清單』與『使用者問題』，輸出恰好兩行：\n"
+        "你是檢索助理。根據下列『已審核FAQ清單』與『使用者問題』，輸出：\n"
         "第1行 MATCH：判斷使用者問題與FAQ的關係——\n"
-        "  • 與某條FAQ問的是完全同一件事 → 輸出 EXACT:編號\n"
-        "  • 與某條FAQ相關，但使用者問得更廣或想知道更多 → 輸出 RELATED:編號\n"
-        "  • 都不相關 → 輸出 NONE\n"
-        "第2行 QUERY：把使用者問題改寫成適合搜尋內部文件的正式關鍵問句（一句話）。\n"
-        "只輸出這兩行，格式範例：\nMATCH: RELATED:7\nQUERY: 小額採購的驗收程序與應備文件\n\n"
+        "  • 與某條FAQ問的是完全同一件事 → EXACT:編號\n"
+        "  • 與某條FAQ相關但使用者問更廣/想知道更多 → RELATED:編號\n"
+        "  • 都不相關 → NONE\n"
+        "接著 QUERY1、QUERY2、QUERY3：把使用者問題改寫成 3 個『用詞不同但意思相同』"
+        "的正式檢索問句（涵蓋同義詞、正式術語），每行一句，用來搜尋內部文件。\n"
+        "格式範例：\nMATCH: NONE\nQUERY1: 採購的完整流程有哪些階段\n"
+        "QUERY2: 政府採購生命週期各步驟說明\nQUERY3: 從請購到結案的作業程序\n\n"
         f"使用者問題：{question}\n\nFAQ清單：\n{listing}"
     )
     try:
         out = _generate(prompt)
     except Exception as e:
         print(f"比對/改寫失敗：{e}")
-        return "NONE", -1, question
+        return "NONE", -1, [question]
     rel, idx = "NONE", -1
     mm = re.search(r"MATCH:\s*(EXACT|RELATED|NONE)(?::\s*(\d+))?", out, re.I)
     if mm:
@@ -213,9 +215,17 @@ def match_and_rewrite(question, faqs):
                 idx = i
         if rel in ("EXACT", "RELATED") and idx < 0:
             rel = "NONE"
-    qm = re.search(r"QUERY:\s*(.+)", out)
-    rquery = qm.group(1).strip() if qm else question
-    return rel, idx, (rquery or question)
+    queries = re.findall(r"QUERY\d*:\s*(.+)", out)
+    queries = [q.strip() for q in queries if q.strip()]
+    if not queries:
+        queries = [question]
+    queries.append(question)   # 也保留原問
+    # 去重
+    seen, uniq = set(), []
+    for q in queries:
+        if q not in seen:
+            seen.add(q); uniq.append(q)
+    return rel, idx, uniq[:4]
 
 def _doc_sources(doc_cands, limit=3):
     seen, out = set(), []
@@ -248,24 +258,37 @@ def fetch_full_doc(idx, ns, file_id):
         print(f"還原完整文件失敗：{e}")
         return "", ""
 
+def _multi_query_docs(idx, queries, ns, k_each=6):
+    """多查詢擴展：每個查詢變體各檢索，合併去重，取分數最高的一批。"""
+    best = {}   # id -> match（保留最高分）
+    for q in queries:
+        try:
+            qv = _embed(q)
+        except Exception:
+            continue
+        for m in _query_docs(idx, qv, ns, k_each):
+            mid = m.get("id")
+            if mid not in best or m.get("score", 0) > best[mid].get("score", 0):
+                best[mid] = m
+    return sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)
+
 def answer_for_business(business, question):
     """三段式：EXACT→逐字FAQ；RELATED→FAQ為準+文件補充；NONE→純文件。附來源。"""
     faqs = get_all_faq(business)
-    rel, fi, rquery = "NONE", -1, question
+    rel, fi, queries = "NONE", -1, [question]
     if faqs and len(faqs) <= FAQ_MATCH_MAX:
-        rel, fi, rquery = match_and_rewrite(question, faqs)
+        rel, fi, queries = match_and_rewrite(question, faqs)
 
     # ① EXACT：完全同一問題 → 逐字回標準答案（一致、可控）
     if rel == "EXACT" and fi >= 0:
         return faqs[fi]["a"].rstrip() + "\n\n（來源：本局採購 FAQ）", "命中FAQ"
 
-    # 取文件（用改寫後的查詢，檢索更準）
+    # 多查詢擴展檢索（撒更廣的網，提升通識/綜覽問題召回）
     ns = business.get("namespace", "")
     doc_cands = []
     try:
-        qvec = _embed(rquery)
         idx = _get_index()
-        doc_cands = _query_docs(idx, qvec, ns, DOC_CAND_K)
+        doc_cands = _multi_query_docs(idx, queries, ns)
     except Exception as e:
         if rel == "RELATED" and fi >= 0:
             return faqs[fi]["a"].rstrip() + "\n\n（來源：本局採購 FAQ）", "命中FAQ"
@@ -281,15 +304,20 @@ def answer_for_business(business, question):
         return ("這個問題我在現有資料中找不到答案 😥\n建議您洽詢採購承辦人確認。"
                 "（您的問題已記錄，將供日後補充進知識庫）"), "未解答"
 
-    # 父文件還原：把「最相關那份文件」整份抓回來（解決教學檔/流程檔答不完整）
+    # 父文件還原：把「最相關的前 2 份文件」整份抓回來（綜覽/跨檔問題更完整）
     blocks, used_files = [], set()
-    if doc_cands:
-        top_fid = doc_cands[0].get("metadata", {}).get("file_id", "")
-        if top_fid:
-            full_text, full_src = fetch_full_doc(idx, ns, top_fid)
-            if full_text:
-                blocks.append(f"【{full_src}（完整內容）】\n{full_text}")
-                used_files.add(top_fid)
+    top_fids = []
+    for m in doc_cands:
+        fid = m.get("metadata", {}).get("file_id", "")
+        if fid and fid not in top_fids:
+            top_fids.append(fid)
+        if len(top_fids) >= 2:
+            break
+    for fid in top_fids:
+        full_text, full_src = fetch_full_doc(idx, ns, fid)
+        if full_text:
+            blocks.append(f"【{full_src}（完整內容）】\n{full_text}")
+            used_files.add(fid)
     # 其餘來自「不同檔案」的片段，補充廣度
     for m in doc_cands:
         fid = m.get("metadata", {}).get("file_id", "")
