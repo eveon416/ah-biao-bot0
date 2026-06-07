@@ -93,7 +93,9 @@ def _embed_many(texts):
     """一次批次 embedding 多個查詢，降低延遲。"""
     return [v.tolist() for v in _get_embed_model().query_embed(texts)]
 
-# ── Gemini 生成（urllib）────────────────────────────────────────────────────
+# ── Gemini 生成（urllib，多模型備援抗 429/503）──────────────────────────────
+GEN_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
+
 def _gemini_post(path, payload):
     url = f"https://generativelanguage.googleapis.com/v1beta/{path}?key={GEMINI_API_KEY}"
     data = json.dumps(payload).encode()
@@ -102,14 +104,26 @@ def _gemini_post(path, payload):
         return json.loads(r.read())
 
 def _generate(prompt):
-    resp = _gemini_post(f"models/{GEN_MODEL}:generateContent", {
+    payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2048,
-                              "thinkingConfig": {"thinkingBudget": 0}},
-    })
-    cand = resp["candidates"][0]
-    parts = cand.get("content", {}).get("parts", [])
-    return "".join(p.get("text", "") for p in parts).strip()
+                             "thinkingConfig": {"thinkingBudget": 0}},
+    }
+    import time as _t
+    last = ""
+    for attempt in range(4):                      # 額度滿(429)或過載(503)→換模型重試
+        model = GEN_MODELS[attempt % len(GEN_MODELS)]
+        try:
+            resp = _gemini_post(f"models/{model}:generateContent", payload)
+            cand = resp["candidates"][0]
+            parts = cand.get("content", {}).get("parts", [])
+            text = "".join(p.get("text", "") for p in parts).strip()
+            if text:
+                return text
+        except Exception as e:
+            last = str(e)
+            _t.sleep(1.2)
+    raise RuntimeError(f"生成失敗（已試多個模型）：{last}")
 
 # ── Google Sheets 寫入（service account）───────────────────────────────────
 def _sheets_token():
