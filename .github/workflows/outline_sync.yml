@@ -1,0 +1,44 @@
+name: Outline Index
+
+# 為大型教學檔生成「大綱索引」，提升綜覽/通識問題的召回。可重複觸發續跑。
+on:
+  workflow_dispatch:
+
+jobs:
+  outline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: |
+          pip install \
+            google-auth>=2.23.0 \
+            google-api-python-client>=2.108.0 \
+            pinecone>=5.0.0 \
+            fastembed>=0.4.0
+      - name: Build outline index
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          PINECONE_API_KEY:            ${{ secrets.PINECONE_API_KEY }}
+          GEMINI_API_KEY:              ${{ secrets.GEMINI_API_KEY }}
+          PINECONE_INDEX_NAME:         ah-biao-bot
+          OUTLINE_ONLY:                "1"
+        run: python scripts/build_index.py
+      - name: Save outline checkpoint
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/outline_ckpt.json || true
+          if git diff --staged --quiet; then
+            echo "no change"
+          else
+            git commit -m "chore: update outline checkpoint [$(date -u '+%Y-%m-%d %H:%M')]"
+            for a in 1 2 3; do git pull --rebase --autostash origin main && git push origin main && break; sleep 5; done
+          fi

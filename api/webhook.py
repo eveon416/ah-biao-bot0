@@ -304,15 +304,29 @@ def answer_for_business(business, question):
         return ("這個問題我在現有資料中找不到答案 😥\n建議您洽詢採購承辦人確認。"
                 "（您的問題已記錄，將供日後補充進知識庫）"), "未解答"
 
-    # 父文件還原：把「最相關的前 2 份文件」整份抓回來（綜覽/跨檔問題更完整）
+    # 大綱索引：若某教學檔的「大綱」命中，優先還原該檔（綜覽問題召回更強）
+    outline_fids = []
+    try:
+        for q in queries[:2]:
+            ov = _embed(q)
+            ores = idx.query(vector=ov, top_k=3, include_metadata=True, namespace=ns,
+                             filter={"source_type": {"$eq": "outline"}})
+            for m in ores.get("matches", []):
+                if m.get("score", 0) > 0.45:
+                    fid = m.get("metadata", {}).get("file_id", "")
+                    if fid and fid not in outline_fids:
+                        outline_fids.append(fid)
+    except Exception as e:
+        print(f"大綱檢索略過：{e}")
+
+    # 父文件還原：大綱命中的檔 + 片段最相關的檔，整份抓回來（綜覽/跨檔更完整）
     blocks, used_files = [], set()
-    top_fids = []
+    top_fids = list(outline_fids)
     for m in doc_cands:
         fid = m.get("metadata", {}).get("file_id", "")
         if fid and fid not in top_fids:
             top_fids.append(fid)
-        if len(top_fids) >= 2:
-            break
+    top_fids = top_fids[:3]   # 最多還原 3 份
     for fid in top_fids:
         full_text, full_src = fetch_full_doc(idx, ns, fid)
         if full_text:

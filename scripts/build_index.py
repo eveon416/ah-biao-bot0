@@ -42,6 +42,9 @@ EMBED_BATCH      = 256
 MAX_FILE_MB      = 20
 OCR_MAX_PAGES    = 15        # 每個掃描 PDF 最多 OCR 頁數
 OCR_MIN_TEXT     = 80        # 抽出文字少於此字數 → 視為掃描檔，嘗試 OCR
+GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY", "")
+OUTLINE_MIN_CHARS = 2500     # 文件還原後字數 ≥ 此值 → 視為教學/大型檔，生成大綱索引
+GEMINI_MODELS    = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
 
 with open(os.path.join(ROOT, "businesses.json"), "r", encoding="utf-8") as f:
     CONFIG = json.load(f)
@@ -349,6 +352,76 @@ def index_faq(index, business):
         print(f"  FAQ 索引 {len(items)} 筆（namespace={ns}）")
     return len(items)
 
+# ── 大綱索引（教學/大型檔：自動生大綱並建索引，提升綜覽問題召回）──────────────
+OUTLINE_CKPT = os.path.join(ROOT, "data", "outline_ckpt.json")
+
+def _gemini_outline(text):
+    """多模型備援呼叫 Gemini 產生文件大綱（抗 503）。"""
+    prompt = ("為以下文件寫一份『大綱索引』，供語意檢索用：條列涵蓋所有主要主題、"
+              "流程階段、關鍵名詞與同義說法，讓人用各種問法都能對應到本文件。"
+              "300-500字，繁體中文，只輸出大綱。\n\n文件內容：\n" + text[:18000])
+    body = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
+                       "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1024,
+                                            "thinkingConfig": {"thinkingBudget": 0}}}).encode()
+    for attempt in range(9):
+        model = GEMINI_MODELS[attempt % len(GEMINI_MODELS)]
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+            req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=40) as r:
+                j = json.loads(r.read())
+            return "".join(p.get("text", "") for p in j["candidates"][0]["content"]["parts"]).strip()
+        except Exception:
+            time.sleep(8)
+    return ""
+
+def reconstruct_from_chunks(index, ns, file_id):
+    res = index.query(vector=[0.001] * EMBED_DIM, top_k=300, include_metadata=True,
+                      namespace=ns, filter={"file_id": {"$eq": file_id}})
+    chunks = sorted(res.get("matches", []),
+                    key=lambda m: m.get("metadata", {}).get("chunk_idx", 0))
+    if not chunks:
+        return "", ""
+    src = chunks[0].get("metadata", {}).get("source", "文件")
+    parts = [chunks[0].get("metadata", {}).get("text", "")]
+    for m in chunks[1:]:
+        parts.append(m.get("metadata", {}).get("text", "")[CHUNK_OVERLAP:])
+    return "".join(parts), src
+
+def index_outlines(index, business, drive):
+    """為大型教學檔生成大綱並建索引（source_type=outline）。可中斷續跑。"""
+    if not GEMINI_API_KEY:
+        print("  （無 GEMINI_API_KEY，略過大綱索引）")
+        return 0
+    ns = business.get("namespace", "")
+    try:
+        with open(OUTLINE_CKPT) as f:
+            done_out = json.load(f)
+    except Exception:
+        done_out = {}
+    files = list_files(drive, business.get("drive_folder_id", ""))
+    n = 0
+    for f in files:
+        fid = f["id"]
+        if done_out.get(fid):
+            continue
+        text, src = reconstruct_from_chunks(index, ns, fid)
+        if len(text) < OUTLINE_MIN_CHARS:   # 只處理大型/教學檔
+            done_out[fid] = "skip"
+            continue
+        outline = _gemini_outline(text)
+        if outline:
+            item = {"id": f"outline-{fid}", "text": outline, "source": src,
+                    "meta_extra": {"file_id": fid}}
+            upsert(index, ns, [item], embed([outline]), "outline")
+            n += 1
+            print(f"  📑 大綱索引：{src}")
+        done_out[fid] = "done" if outline else "fail"
+        with open(OUTLINE_CKPT, "w") as fo:
+            json.dump(done_out, fo)
+    print(f"  大綱索引完成：新增 {n} 份")
+    return n
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 def main():
     pc = Pinecone(api_key=PINECONE_API_KEY)
@@ -357,6 +430,15 @@ def main():
     done = load_ckpt()
 
     faq_only = os.environ.get("FAQ_ONLY", "") == "1"
+    outline_only = os.environ.get("OUTLINE_ONLY", "") == "1"
+
+    if outline_only:
+        for b in BUSINESSES:
+            print(f"\n=== 大綱索引：{b['name']} ===")
+            index_outlines(index, b, drive)
+        stats = index.describe_index_stats()
+        print(f"\n🎉 大綱索引完成！總向量數：{stats.total_vector_count}")
+        return
 
     for b in BUSINESSES:
         print(f"\n=== 業務：{b['name']}（namespace={b['namespace']}）===")
