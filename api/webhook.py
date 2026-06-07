@@ -227,6 +227,27 @@ def _doc_sources(doc_cands, limit=3):
             break
     return out
 
+FULL_DOC_CAP   = 24000   # 還原整份文件的字數上限（教學檔/流程檔用）
+_CHUNK_OVERLAP = 150     # 與建索引一致，用來去除拼接重疊
+
+def fetch_full_doc(idx, ns, file_id):
+    """把某檔案的所有片段抓回來、依序拼成完整文件（給綜覽性問題用）。"""
+    try:
+        res = idx.query(vector=[0.001] * 512, top_k=300, include_metadata=True,
+                        namespace=ns, filter={"file_id": {"$eq": file_id}})
+        chunks = sorted(res.get("matches", []),
+                        key=lambda m: m.get("metadata", {}).get("chunk_idx", 0))
+        if not chunks:
+            return "", ""
+        src = chunks[0].get("metadata", {}).get("source", "文件")
+        parts = [chunks[0].get("metadata", {}).get("text", "")]
+        for m in chunks[1:]:   # 後續片段去掉與前一段重疊的開頭
+            parts.append(m.get("metadata", {}).get("text", "")[_CHUNK_OVERLAP:])
+        return "".join(parts)[:FULL_DOC_CAP], src
+    except Exception as e:
+        print(f"還原完整文件失敗：{e}")
+        return "", ""
+
 def answer_for_business(business, question):
     """三段式：EXACT→逐字FAQ；RELATED→FAQ為準+文件補充；NONE→純文件。附來源。"""
     faqs = get_all_faq(business)
@@ -260,9 +281,26 @@ def answer_for_business(business, question):
         return ("這個問題我在現有資料中找不到答案 😥\n建議您洽詢採購承辦人確認。"
                 "（您的問題已記錄，將供日後補充進知識庫）"), "未解答"
 
-    doc_block = "\n\n---\n\n".join(
-        f"【{m.get('metadata',{}).get('source','文件')}】\n{m.get('metadata',{}).get('text','')}"
-        for m in doc_cands) or "（無相關文件）"
+    # 父文件還原：把「最相關那份文件」整份抓回來（解決教學檔/流程檔答不完整）
+    blocks, used_files = [], set()
+    if doc_cands:
+        top_fid = doc_cands[0].get("metadata", {}).get("file_id", "")
+        if top_fid:
+            full_text, full_src = fetch_full_doc(idx, ns, top_fid)
+            if full_text:
+                blocks.append(f"【{full_src}（完整內容）】\n{full_text}")
+                used_files.add(top_fid)
+    # 其餘來自「不同檔案」的片段，補充廣度
+    for m in doc_cands:
+        fid = m.get("metadata", {}).get("file_id", "")
+        if fid in used_files:
+            continue
+        used_files.add(fid)
+        md = m.get("metadata", {})
+        blocks.append(f"【{md.get('source','文件')}】\n{md.get('text','')}")
+        if len(blocks) >= 4:
+            break
+    doc_block = "\n\n---\n\n".join(blocks) or "（無相關文件）"
 
     if faq_ctx:   # ② RELATED：以FAQ為準 + 文件補充，綜合回答
         instr = ("請『以下列標準答案為準』，並用文件內容補充更完整的說明"
@@ -272,8 +310,10 @@ def answer_for_business(business, question):
 
     prompt = (
         f"你是花蓮縣衛生局「{business['name']}」業務助理。{instr}\n"
-        "用繁體中文、語氣親切專業。若標準答案與文件都無法回答，"
-        "最後另起一行單獨輸出 [NOTFOUND]。\n"
+        "用繁體中文、語氣親切專業。\n"
+        "若是綜覽性、流程性或「整個生命週期」類的問題，請『完整且有條理』地回答"
+        "（可分階段、分點），先給整體架構；若內容很多，最後主動說明可針對哪一部分再深入詢問。\n"
+        "若標準答案與文件都無法回答，最後另起一行單獨輸出 [NOTFOUND]。\n"
         "若回答中出現具體人名（非單位或職稱），最後另起一行單獨輸出 [HASNAME]。\n\n"
         f"{faq_ctx}文件內容：\n{doc_block}\n\n問題：{question}\n\n回答："
     )
