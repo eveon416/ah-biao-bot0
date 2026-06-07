@@ -149,77 +149,101 @@ def compute_warnings(answer: str, matches, name_flag: bool) -> str:
             break
     return "、".join(warns)
 
-# ── RAG 主流程（FAQ 用語意比對，不靠關鍵字門檻）────────────────────────────────
-FAQ_CAND_K  = 12     # FAQ 候選數（給語意比對挑）
-DOC_CAND_K  = 6
-FAQ_CAND_MIN_SCORE = 0.35   # 候選門檻放寬，由 AI 判斷語意是否真的對得上
+# ── RAG 主流程（終極版：全部 FAQ 交給 AI 語意比對，保證不漏接）──────────────────
+import time as _time
+DOC_CAND_K     = 6
+FAQ_CACHE_TTL  = 600          # FAQ 清單快取 10 分鐘
+FAQ_MATCH_MAX  = 400          # FAQ 數量在此以內 → 全部送 AI 比對；超過則改用向量候選
+_FAQ_CACHE     = {}           # {business_key: (timestamp, [ {q,a} ])}
 
-def _query(idx, qvec, ns, k, source_type):
+def _query_docs(idx, qvec, ns, k):
     res = idx.query(vector=qvec, top_k=k, include_metadata=True, namespace=ns,
-                    filter={"source_type": {"$eq": source_type}})
-    return res.get("matches", [])
+                    filter={"source_type": {"$eq": "doc"}})
+    return [m for m in res.get("matches", []) if m.get("score", 0) > 0.3]
+
+def get_all_faq(business):
+    """抓某業務的全部已審查 FAQ（{q,a}），含 10 分鐘記憶體快取。"""
+    key = business["key"]
+    cached = _FAQ_CACHE.get(key)
+    if cached and (_time.time() - cached[0] < FAQ_CACHE_TTL):
+        return cached[1]
+    faqs = []
+    try:
+        idx = _get_index()
+        seed = [0.001] * 512   # 取全部 faq，用什麼向量都行
+        res = idx.query(vector=seed, top_k=500, include_metadata=True,
+                        namespace=business.get("namespace", ""),
+                        filter={"source_type": {"$eq": "faq"}})
+        for m in res.get("matches", []):
+            md = m.get("metadata", {})
+            q, a = md.get("faq_question", ""), md.get("faq_answer", "")
+            if q and a:
+                faqs.append({"q": q, "a": a})
+    except Exception as e:
+        print(f"取得 FAQ 清單失敗：{e}")
+    _FAQ_CACHE[key] = (_time.time(), faqs)
+    return faqs
+
+def match_faq(question, faqs):
+    """把全部 FAQ 問題交給 Gemini 判斷語意，回傳命中索引或 -1。"""
+    if not faqs:
+        return -1
+    listing = "\n".join(f"{i+1}. {f['q']}" for i, f in enumerate(faqs))
+    prompt = (
+        "以下是已審核的 FAQ 問題清單。請判斷『使用者問題』是否與其中某一條"
+        "問的是同一件事（用詞、語氣不同沒關係，只要核心想問的相同即可）。\n"
+        "若有相符，只輸出一行：USE_FAQ:編號（例如 USE_FAQ:7）。\n"
+        "若沒有任何一條真正相符，只輸出：NONE。\n"
+        "不要輸出其他任何文字。\n\n"
+        f"使用者問題：{question}\n\nFAQ 問題清單：\n{listing}"
+    )
+    try:
+        out = _generate(prompt)
+    except Exception as e:
+        print(f"FAQ 比對失敗：{e}")
+        return -1
+    m = re.search(r"USE_FAQ:\s*(\d+)", out)
+    if m:
+        i = int(m.group(1)) - 1
+        if 0 <= i < len(faqs):
+            return i
+    return -1
 
 def answer_for_business(business, question):
-    """回傳 (使用者答案, 警示字串)。FAQ 以語意比對優先。"""
+    """回傳 (使用者答案, 警示字串)。先用全 FAQ 語意比對，命中即用標準答案。"""
+    # 1) FAQ 優先（全部 FAQ 交給 AI 判斷，保證不漏接）
+    faqs = get_all_faq(business)
+    if faqs and len(faqs) <= FAQ_MATCH_MAX:
+        hit = match_faq(question, faqs)
+        if hit >= 0:
+            return faqs[hit]["a"], "命中FAQ"
+
+    # 2) 沒命中 FAQ → 用文件 RAG 回答
     ns = business.get("namespace", "")
     try:
         qvec = _embed(question)
+        idx = _get_index()
+        doc_cands = _query_docs(idx, qvec, ns, DOC_CAND_K)
     except Exception as e:
         return f"查詢時發生錯誤：{e}", ""
 
-    try:
-        idx = _get_index()
-        faq_cands = _query(idx, qvec, ns, FAQ_CAND_K, "faq")
-        doc_cands = _query(idx, qvec, ns, DOC_CAND_K, "doc")
-    except Exception as e:
-        return f"資料庫查詢失敗：{e}", ""
-
-    faq_cands = [m for m in faq_cands if m.get("score", 0) > FAQ_CAND_MIN_SCORE]
-    doc_cands = [m for m in doc_cands if m.get("score", 0) > 0.3]
-
-    if not faq_cands and not doc_cands:
+    if not doc_cands:
         return (f"我在「{business['name']}」的資料中找不到相關內容，"
                 "請換個方式提問，或確認文件／FAQ 是否已收錄。"), ""
 
-    # 組合提示：先列 FAQ 候選（問題），再列文件
-    faq_block = "\n".join(
-        f"[FAQ {i+1}] {m.get('metadata',{}).get('faq_question','')}"
-        for i, m in enumerate(faq_cands)) or "（無）"
-    doc_block = "\n\n---\n\n".join(
+    ctx = "\n\n---\n\n".join(
         f"【{m.get('metadata',{}).get('source','文件')}】\n{m.get('metadata',{}).get('text','')}"
-        for m in doc_cands) or "（無）"
-
+        for m in doc_cands)
     prompt = (
-        f"你是花蓮縣衛生局「{business['name']}」業務助理。\n"
-        "請依以下步驟回答使用者問題：\n"
-        "步驟1：判斷下列「候選FAQ」中，是否有某一條問的是『與使用者同一件事』"
-        "（用詞不同沒關係，只要核心問題相同）。\n"
-        "  → 若有，整則回覆「只能輸出一行」：USE_FAQ:編號（例如 USE_FAQ:3），不要有其他任何字。\n"
-        "  → 若沒有任何一條對得上，進行步驟2。\n"
-        "步驟2：只根據下列「文件內容」回答，用繁體中文、語氣親切專業；"
-        "找不到就說明，不要編造。若回答中出現具體人名（非單位或職稱），"
-        "在最後另起一行單獨輸出 [HASNAME]。\n\n"
-        f"使用者問題：{question}\n\n候選FAQ：\n{faq_block}\n\n文件內容：\n{doc_block}\n\n回覆："
+        f"你是花蓮縣衛生局「{business['name']}」業務助理，只根據以下文件回答問題。\n"
+        "若文件中找不到答案，請明確說明，不要編造。回答用繁體中文，語氣親切專業。\n"
+        "若回答中出現具體人名（非單位或職稱），最後另起一行單獨輸出 [HASNAME]。\n\n"
+        f"文件內容：\n{ctx}\n\n問題：{question}\n\n回答："
     )
     try:
         raw = _generate(prompt)
     except Exception as e:
         return f"生成回答時發生錯誤：{e}", ""
-
-    # 命中 FAQ → 直接回傳該 FAQ 的標準答案（逐字）
-    mfaq = re.search(r"USE_FAQ:\s*(\d+)", raw)
-    if mfaq:
-        i = int(mfaq.group(1)) - 1
-        if 0 <= i < len(faq_cands):
-            md = faq_cands[i].get("metadata", {})
-            ans = md.get("faq_answer", "")
-            if not ans:
-                txt = md.get("text", "")
-                ans = txt.split("答：", 1)[-1].strip() if "答：" in txt else txt
-            if ans:
-                return ans, "命中FAQ"
-
-    # 否則為文件重組答案
     name_flag = "[HASNAME]" in raw
     answer = raw.replace("[HASNAME]", "").strip()
     warns = compute_warnings(answer, doc_cands, name_flag)
