@@ -557,7 +557,7 @@ def _gemini_outline(text):
     return ""
 
 def reconstruct_from_chunks(index, ns, file_id):
-    res = index.query(vector=[0.001] * EMBED_DIM, top_k=300, include_metadata=True,
+    res = index.query(vector=[0.001] * EMBED_DIM, top_k=1000, include_metadata=True,
                       namespace=ns, filter={"file_id": {"$eq": file_id}})
     chunks = sorted(res.get("matches", []),
                     key=lambda m: m.get("metadata", {}).get("chunk_idx", 0))

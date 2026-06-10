@@ -328,9 +328,13 @@ def answer_for_businesses(businesses, question):
     faqs = []
     for b in businesses:
         faqs.extend(get_all_faq(b))
+    # 一律做查詢擴展（即使沒有 FAQ 也要把問題改寫成多個檢索變體，提升召回）；
+    # FAQ 過多時只把前 FAQ_MATCH_MAX 筆送進比對，但擴展照常進行。
     rel, fi, queries = "NONE", -1, [question]
-    if faqs and len(faqs) <= FAQ_MATCH_MAX:
-        rel, fi, queries = match_and_rewrite(question, faqs)
+    try:
+        rel, fi, queries = match_and_rewrite(question, faqs[:FAQ_MATCH_MAX])
+    except Exception as e:
+        print(f"比對/改寫略過：{e}")
 
     # ① EXACT：完全同一問題 → 逐字回標準答案
     if rel == "EXACT" and fi >= 0:
@@ -436,8 +440,27 @@ def answer_for_businesses(businesses, question):
     except Exception as e:
         return f"生成回答時發生錯誤：{e}", ""
 
+    # 救援：有撈到夠相關的文件卻被判 NOTFOUND，可能是模型過度保守 → 換更寬鬆指令再試一次
+    top_score = doc_cands[0].get("score", 0) if doc_cands else 0
+    if "[NOTFOUND]" in raw and (faq_ctx or top_score >= 0.6):
+        salvage = (
+            "你是花蓮縣衛生局的業務助理。下面是與問題最相關的內部資料。\n"
+            "請盡量根據這些資料整理出對使用者有幫助的回答：即使只部分相關，也要說明"
+            "資料中有提到的重點，並指出哪些部分資料未涵蓋。用繁體中文、條理清楚。\n"
+            "只有在資料『完全沒有任何相關資訊』時，才另起一行單獨輸出 [NOTFOUND]。\n\n"
+            f"{faq_ctx}資料內容：\n{doc_block}\n\n問題：{question}\n\n回答：")
+        try:
+            raw2 = _generate(salvage)
+            if raw2.strip() and "[NOTFOUND]" not in raw2:
+                raw = raw2
+        except Exception as e:
+            print(f"NOTFOUND 救援略過：{e}")
+
     if "[NOTFOUND]" in raw:
-        return ("這個問題我在現有資料中找不到完整答案 😥\n建議您洽詢相關業務承辦人確認。"
+        srcs = _doc_sources(doc_cands, 3)
+        hint = ("\n你可以先參考這幾份資料：" + "、".join(srcs)) if srcs else ""
+        return ("這個問題我在現有資料中找不到完整答案 😥" + hint +
+                "\n建議您洽詢相關業務承辦人確認。"
                 "（您的問題已記錄，將供日後補充進知識庫）"), "未解答"
 
     name_flag = "[HASNAME]" in raw
@@ -517,6 +540,11 @@ def webhook():
         # 回答
         try:
             answer, warns = answer_for_businesses(targets, question)
+            # 救援：鎖定單一業務卻答不出來 → 自動改搜全部業務（答案可能在別的業務）
+            if warns == "未解答" and business is not None and len(BUSINESSES) > 1:
+                a2, w2 = answer_for_businesses(BUSINESSES, question)
+                if w2 != "未解答":
+                    answer, warns, biz_name = a2, w2, "跨業務"
         except Exception as e:
             answer, warns = f"系統錯誤：{e}", ""
         _reply(token, answer)
@@ -529,10 +557,22 @@ def webhook():
 
     return "OK", 200
 
+def _run_diag():
+    # 暫時：跑完整回答流程驗證（驗完移除）
+    q = request.args.get("q", "")
+    try:
+        ans, warns = answer_for_businesses(BUSINESSES, q)
+        return f"[warns={warns}]\n{ans}", 200
+    except Exception as e:
+        import traceback
+        return f"diag err: {e}\n{traceback.format_exc()}", 200
+
 @app.route("/",            methods=["GET"])
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
+    if request.args.get("k", "") == "biao-diag-7x9":
+        return _run_diag()
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
