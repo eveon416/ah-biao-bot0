@@ -242,8 +242,9 @@ def extract_text(service, f):
         if mime.startswith("text/"):
             return _download(service, fid).decode("utf-8", "ignore")
     except Exception as e:
-        print(f"  ⚠ 讀取失敗 {name}: {e}")
-    return ""
+        print(f"  ⚠ 讀取失敗（暫時性，將重試）{name}: {e}")
+        return None          # 例外＝暫時性錯誤 → 回 None 讓上層重試
+    return ""                # 走到這＝不支援的型態（視為真空白）
 
 def chunk_text(text, source, file_id, modified, namespace):
     text = (text or "").strip()
@@ -349,12 +350,17 @@ def index_drive(index, business, drive, done):
         prev = done.get(fid, "")
         if prev == fmod:                       # 已成功索引（有內容）
             continue
-        # 解析「空抽取重試次數」：值格式 empty<N>:<modifiedTime>
-        em = re.match(r"^empty(\d+):(.*)$", prev) if prev else None
+        # 暫時性錯誤的重試次數：值格式 err<N>:<modifiedTime>
+        em = re.match(r"^err(\d+):(.*)$", prev) if prev else None
         retries = int(em.group(1)) if (em and em.group(2) == fmod) else 0
-        if retries >= 2:                       # 連續 2 次抽不到文字才放棄（避免暫時性失敗永久跳過）
+        if retries >= 5:                       # 暫時性錯誤最多重試 5 次才放棄
             continue
         text = extract_text(drive, f)
+        if text is None:                       # 暫時性錯誤（下載/解析爆錯）→ 記次數，下次再試
+            done[fid] = f"err{retries+1}:{fmod}"
+            print(f"  [{i}/{len(files)}] {f['name']} → 讀取錯誤（重試 {retries+1}/5）")
+            save_ckpt(done)
+            continue
         chunks = chunk_text(text, f["name"], fid, fmod, ns)
         if chunks:
             for j in range(0, len(chunks), EMBED_BATCH):
@@ -362,10 +368,9 @@ def index_drive(index, business, drive, done):
                 upsert(index, ns, bc, embed([c["text"] for c in bc]), "doc")
             total += len(chunks)
             print(f"  [{i}/{len(files)}] {f['name']} → {len(chunks)} 片段")
-            done[fid] = fmod
         else:
-            done[fid] = f"empty{retries+1}:{fmod}"   # 抽到空 → 記重試次數，下次再試
-            print(f"  [{i}/{len(files)}] {f['name']} → 抽不到文字（重試{retries+1}/2）")
+            print(f"  [{i}/{len(files)}] {f['name']} → 真的沒文字（標記完成）")
+        done[fid] = fmod                       # 有內容或確定空白 → 標記完成
         save_ckpt(done)
     return total
 
