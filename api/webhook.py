@@ -529,43 +529,10 @@ def webhook():
 
     return "OK", 200
 
-def _run_diag():
-    # 暫時診斷：驗證「以相關段落為中心」的長文件還原，驗完即移除
-    q = request.args.get("q", "")
-    try:
-        idx = _get_index()
-        qv = _embed_many([q])
-        best, nsby = {}, {}
-        for ns in [""] + [b["namespace"] for b in BUSINESSES if b.get("namespace")]:
-            for m in _multi_query_docs(idx, qv, ns):
-                mid = m.get("id")
-                if mid not in best or m.get("score", 0) > best[mid].get("score", 0):
-                    best[mid] = m; nsby[mid] = ns
-        cands = sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)[:10]
-        if not cands:
-            return "（無命中）", 200
-        lines = [f"Q: {q}", "TOP:"]
-        for m in cands:
-            md = m.get("metadata", {})
-            lines.append(f"  {round(m.get('score',0),3)}  {md.get('source','')[:30]}  ci={md.get('chunk_idx')}")
-        top = cands[0]; fid = top.get("metadata", {}).get("file_id", ""); ns = nsby.get(top.get("id"), "")
-        focus = {m.get("metadata", {}).get("chunk_idx") for m in cands
-                 if m.get("metadata", {}).get("file_id") == fid}
-        full, src = fetch_full_doc(idx, ns, fid, focus=focus)
-        hit = top.get("metadata", {}).get("text", "")[:40]
-        lines += ["", f"TOPFILE: {src}", f"focus chunk_idx: {sorted(focus)}",
-                  f"還原字數: {len(full)}", f"命中片段文字含於還原? {hit in full}",
-                  f"HEAD: {full[:70]!r}", f"TAIL: {full[-70:]!r}"]
-        return "\n".join(lines), 200
-    except Exception as e:
-        return f"diag err: {e}", 200
-
 @app.route("/",            methods=["GET"])
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
-    if request.args.get("k", "") == "biao-diag-7x9":
-        return _run_diag()
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
