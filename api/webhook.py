@@ -322,9 +322,11 @@ def answer_for_businesses(businesses, question):
                     best[mid] = m
                     ns_by_id[mid] = ns
         doc_cands = sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)
-        print("[RETRIEVAL] q=" + question[:40] + " | queries=" + str(queries) +
-              " | top=" + str([(m.get("metadata", {}).get("source", "")[:22],
-                                round(m.get("score", 0), 3)) for m in doc_cands[:8]]))
+        if "DEBUGRET" in question:   # 暫時診斷：回傳實際撈到的文件（測完移除）
+            dbg = "查詢變體：" + " | ".join(queries) + "\n撈到：\n" + "\n".join(
+                f"{round(m.get('score',0),3)}  {m.get('metadata',{}).get('source','')[:30]}"
+                for m in doc_cands[:10])
+            return dbg, ""
     except Exception as e:
         if rel == "RELATED" and fi >= 0:
             return faqs[fi]["a"].rstrip() + "\n\n（來源：本局 FAQ）", "命中FAQ"
