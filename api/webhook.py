@@ -287,27 +287,43 @@ def _multi_query_docs(idx, qvecs, ns, k_each=6):
     return sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)
 
 def answer_for_business(business, question):
-    """三段式：EXACT→逐字FAQ；RELATED→FAQ為準+文件補充；NONE→純文件。附來源。"""
-    faqs = get_all_faq(business)
+    return answer_for_businesses([business], question)
+
+def answer_for_businesses(businesses, question):
+    """三段式回答；可跨多個業務搜尋（沒指定業務時搜全部，不卡使用者）。"""
+    # 合併所有目標業務的 FAQ
+    faqs = []
+    for b in businesses:
+        faqs.extend(get_all_faq(b))
     rel, fi, queries = "NONE", -1, [question]
     if faqs and len(faqs) <= FAQ_MATCH_MAX:
         rel, fi, queries = match_and_rewrite(question, faqs)
 
-    # ① EXACT：完全同一問題 → 逐字回標準答案（一致、可控）
+    # ① EXACT：完全同一問題 → 逐字回標準答案
     if rel == "EXACT" and fi >= 0:
-        return faqs[fi]["a"].rstrip() + "\n\n（來源：本局採購 FAQ）", "命中FAQ"
+        return faqs[fi]["a"].rstrip() + "\n\n（來源：本局 FAQ）", "命中FAQ"
 
-    # 多查詢擴展檢索（撒更廣的網，提升通識/綜覽問題召回）
-    ns = business.get("namespace", "")
-    doc_cands = []
-    qvecs = []
+    # 各業務 namespace 都查（跨業務搜尋）
+    ns_list = []
+    for b in businesses:
+        ns = b.get("namespace", "")
+        if ns not in ns_list:
+            ns_list.append(ns)
+    doc_cands, qvecs = [], []
     try:
         idx = _get_index()
-        qvecs = _embed_many(queries)          # 一次批次算好，文件+大綱共用
-        doc_cands = _multi_query_docs(idx, qvecs, ns)
+        qvecs = _embed_many(queries)
+        best = {}
+        for ns in ns_list:
+            for m in _multi_query_docs(idx, qvecs, ns):
+                m["_ns"] = ns
+                mid = m.get("id")
+                if mid not in best or m.get("score", 0) > best[mid].get("score", 0):
+                    best[mid] = m
+        doc_cands = sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)
     except Exception as e:
         if rel == "RELATED" and fi >= 0:
-            return faqs[fi]["a"].rstrip() + "\n\n（來源：本局採購 FAQ）", "命中FAQ"
+            return faqs[fi]["a"].rstrip() + "\n\n（來源：本局 FAQ）", "命中FAQ"
         return f"查詢時發生錯誤：{e}", ""
 
     faq_ctx = ""
@@ -315,39 +331,39 @@ def answer_for_business(business, question):
         faq_ctx = ("【已審核標準答案（權威，必須以此為準，不可牴觸）】\n"
                    f"問：{faqs[fi]['q']}\n答：{faqs[fi]['a']}\n\n")
 
-    # ③ 完全沒料 → 未解答（建議洽承辦，並會記錄到待審核供補FAQ）
     if not doc_cands and not faq_ctx:
-        return ("這個問題我在現有資料中找不到答案 😥\n建議您洽詢採購承辦人確認。"
+        return ("這個問題我在現有資料中找不到答案 😥\n建議您洽詢相關業務承辦人確認。"
                 "（您的問題已記錄，將供日後補充進知識庫）"), "未解答"
 
-    # 大綱索引：若某教學檔的「大綱」命中，優先還原該檔（綜覽問題召回更強）
-    outline_fids = []
+    # 大綱命中 → 優先還原該教學檔
+    outline_fids = {}   # fid -> ns
     try:
-        for ov in qvecs[:2]:
-            ores = idx.query(vector=ov, top_k=3, include_metadata=True, namespace=ns,
-                             filter={"source_type": {"$eq": "outline"}})
-            for m in ores.get("matches", []):
-                if m.get("score", 0) > 0.45:
-                    fid = m.get("metadata", {}).get("file_id", "")
-                    if fid and fid not in outline_fids:
-                        outline_fids.append(fid)
+        for ns in ns_list:
+            for ov in qvecs[:2]:
+                ores = idx.query(vector=ov, top_k=3, include_metadata=True, namespace=ns,
+                                 filter={"source_type": {"$eq": "outline"}})
+                for m in ores.get("matches", []):
+                    if m.get("score", 0) > 0.45:
+                        fid = m.get("metadata", {}).get("file_id", "")
+                        if fid and fid not in outline_fids:
+                            outline_fids[fid] = ns
     except Exception as e:
         print(f"大綱檢索略過：{e}")
 
-    # 父文件還原：大綱命中的檔 + 片段最相關的檔，整份抓回來（綜覽/跨檔更完整）
+    # 父文件還原（大綱命中檔 + 最相關檔），各自用所屬 namespace
     blocks, used_files = [], set()
-    top_fids = list(outline_fids)
+    fid_ns = dict(outline_fids)
+    ordered = list(outline_fids.keys())
     for m in doc_cands:
         fid = m.get("metadata", {}).get("file_id", "")
-        if fid and fid not in top_fids:
-            top_fids.append(fid)
-    top_fids = top_fids[:3]   # 最多還原 3 份
-    for fid in top_fids:
-        full_text, full_src = fetch_full_doc(idx, ns, fid)
+        if fid and fid not in fid_ns:
+            fid_ns[fid] = m.get("_ns", "")
+            ordered.append(fid)
+    for fid in ordered[:3]:
+        full_text, full_src = fetch_full_doc(idx, fid_ns.get(fid, ""), fid)
         if full_text:
             blocks.append(f"【{full_src}（完整內容）】\n{full_text}")
             used_files.add(fid)
-    # 其餘來自「不同檔案」的片段，補充廣度
     for m in doc_cands:
         fid = m.get("metadata", {}).get("file_id", "")
         if fid in used_files:
@@ -359,17 +375,13 @@ def answer_for_business(business, question):
             break
     doc_block = "\n\n---\n\n".join(blocks) or "（無相關文件）"
 
-    if faq_ctx:   # ② RELATED：以FAQ為準 + 文件補充，綜合回答
-        instr = ("請『以下列標準答案為準』，並用文件內容補充更完整的說明"
-                 "（補充不可牴觸標準答案）。")
-    else:         # NONE：純文件
-        instr = "請只根據下列文件內容回答。"
-
+    instr = ("請『以下列標準答案為準』，並用文件內容補充更完整的說明（補充不可牴觸標準答案）。"
+             if faq_ctx else "請只根據下列文件內容回答。")
     prompt = (
-        f"你是花蓮縣衛生局「{business['name']}」業務助理。{instr}\n"
+        f"你是花蓮縣衛生局的業務助理。{instr}\n"
         "用繁體中文、語氣親切專業。\n"
-        "若是綜覽性、流程性或「整個生命週期」類的問題，請『完整且有條理』地回答"
-        "（可分階段、分點），先給整體架構；若內容很多，最後主動說明可針對哪一部分再深入詢問。\n"
+        "若是綜覽性、流程性問題，請完整有條理地回答（可分階段、分點），"
+        "先給整體架構；內容很多時最後主動說明可針對哪部分再深入詢問。\n"
         "若標準答案與文件都無法回答，最後另起一行單獨輸出 [NOTFOUND]。\n"
         "若回答中出現具體人名（非單位或職稱），最後另起一行單獨輸出 [HASNAME]。\n\n"
         f"{faq_ctx}文件內容：\n{doc_block}\n\n問題：{question}\n\n回答："
@@ -380,17 +392,14 @@ def answer_for_business(business, question):
         return f"生成回答時發生錯誤：{e}", ""
 
     if "[NOTFOUND]" in raw:
-        return ("這個問題我在現有資料中找不到完整答案 😥\n建議您洽詢採購承辦人確認。"
+        return ("這個問題我在現有資料中找不到完整答案 😥\n建議您洽詢相關業務承辦人確認。"
                 "（您的問題已記錄，將供日後補充進知識庫）"), "未解答"
 
     name_flag = "[HASNAME]" in raw
     answer = raw.replace("[HASNAME]", "").replace("[NOTFOUND]", "").strip()
-
-    # 來源標註
-    cites = (["採購FAQ"] if faq_ctx else []) + _doc_sources(doc_cands)
+    cites = (["FAQ"] if faq_ctx else []) + _doc_sources(doc_cands)
     if cites:
         answer += "\n\n（依據：" + "、".join(cites) + "）"
-
     warns = compute_warnings(answer, doc_cands, name_flag)
     return answer, warns
 
@@ -447,32 +456,30 @@ def webhook():
             _reply(token, "您好！我是阿標。請在訊息中說明業務別並提問，例如：\n「阿標 採購 小額採購限額多少？」")
             continue
 
-        # 業務判斷
+        # 業務判斷：有講業務→只搜該業務（精準）；沒講→搜全部業務（不卡使用者）
         business = detect_business(question)
-        # 記錄到待審核時，把業務關鍵字從問題開頭去掉，讓問題更乾淨
         log_question = question
         if business is not None:
+            targets = [business]
+            biz_name = business["name"]
             for kw in business.get("keywords", []):
                 log_question = log_question.replace(kw, "", 1)
             log_question = log_question.strip(" ,，:：、")
-        if business is None:
-            names = "、".join(b["name"] for b in BUSINESSES) or "（尚未設定業務）"
-            _reply(token, f"請問您要詢問的是哪一個業務呢？目前可詢問：{names}。\n"
-                          f"例如：「阿標 採購 …」")
-            continue
+        else:
+            targets = BUSINESSES            # 跨全部業務搜尋
+            biz_name = "未指定"
 
         # 回答
         try:
-            answer, warns = answer_for_business(business, question)
+            answer, warns = answer_for_businesses(targets, question)
         except Exception as e:
             answer, warns = f"系統錯誤：{e}", ""
         _reply(token, answer)
 
-        # 命中既有 FAQ → 已涵蓋，不重複寫入待審核（避免灌爆）
-        # 其餘（RAG 重組的答案）才寫入待審核，供你日後決定是否收錄
+        # 命中既有 FAQ → 已涵蓋，不重複寫入待審核
         if warns != "命中FAQ":
             ts = _now_tw().strftime("%Y%m%d%H%M%S")
-            row = [ts, business["name"], "", log_question or question, answer, "", "", "", "待審核", warns]
+            row = [ts, biz_name, "", log_question or question, answer, "", "", "", "待審核", warns]
             _append_review_row(row)
 
     return "OK", 200
