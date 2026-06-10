@@ -14,6 +14,7 @@
 
 import io
 import os
+import re
 import json
 import time
 import hashlib
@@ -179,6 +180,26 @@ def _docx_text(raw, name):
         print(f"  ⚠ DOCX 失敗 {name}: {e}")
         return ""
 
+def _doc_text(raw, name):
+    """舊版 .doc：python-docx 讀不了，用 LibreOffice 轉純文字（中文友善）。"""
+    import subprocess, tempfile
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, "f.doc")
+            with open(src, "wb") as fh:
+                fh.write(raw)
+            env = dict(os.environ, HOME=td)
+            subprocess.run(["libreoffice", "--headless", "--convert-to", "txt:Text",
+                            "--outdir", td, src],
+                           timeout=150, capture_output=True, env=env)
+            out = os.path.join(td, "f.txt")
+            if os.path.exists(out):
+                with open(out, encoding="utf-8", errors="ignore") as fh:
+                    return fh.read()
+    except Exception as e:
+        print(f"  ⚠ DOC 轉換失敗 {name}: {e}")
+    return ""
+
 def _xlsx_text(raw, name):
     try:
         import openpyxl
@@ -194,8 +215,6 @@ def _xlsx_text(raw, name):
         print(f"  ⚠ XLSX 失敗 {name}: {e}")
         return ""
 
-DOCX_MIMES = {"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-              "application/msword"}
 XLSX_MIMES = {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
               "application/vnd.ms-excel"}
 
@@ -214,8 +233,10 @@ def extract_text(service, f):
             if len((text or "").strip()) < OCR_MIN_TEXT:   # 疑似掃描檔 → OCR
                 text = _ocr_pdf(raw, name) or text
             return text
-        if mime in DOCX_MIMES:
+        if mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
             return _docx_text(_download(service, fid), name)
+        if mime == "application/msword":          # 舊版 .doc
+            return _doc_text(_download(service, fid), name)
         if mime in XLSX_MIMES:
             return _xlsx_text(_download(service, fid), name)
         if mime.startswith("text/"):
@@ -316,7 +337,13 @@ def index_drive(index, business, drive, done):
     total = 0
     for i, f in enumerate(files, 1):
         fid, fmod = f["id"], f.get("modifiedTime", "")
-        if done.get(fid) == fmod:
+        prev = done.get(fid, "")
+        if prev == fmod:                       # 已成功索引（有內容）
+            continue
+        # 解析「空抽取重試次數」：值格式 empty<N>:<modifiedTime>
+        em = re.match(r"^empty(\d+):(.*)$", prev) if prev else None
+        retries = int(em.group(1)) if (em and em.group(2) == fmod) else 0
+        if retries >= 2:                       # 連續 2 次抽不到文字才放棄（避免暫時性失敗永久跳過）
             continue
         text = extract_text(drive, f)
         chunks = chunk_text(text, f["name"], fid, fmod, ns)
@@ -326,7 +353,10 @@ def index_drive(index, business, drive, done):
                 upsert(index, ns, bc, embed([c["text"] for c in bc]), "doc")
             total += len(chunks)
             print(f"  [{i}/{len(files)}] {f['name']} → {len(chunks)} 片段")
-        done[fid] = fmod
+            done[fid] = fmod
+        else:
+            done[fid] = f"empty{retries+1}:{fmod}"   # 抽到空 → 記重試次數，下次再試
+            print(f"  [{i}/{len(files)}] {f['name']} → 抽不到文字（重試{retries+1}/2）")
         save_ckpt(done)
     return total
 

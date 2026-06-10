@@ -21,10 +21,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install OCR tools (tesseract + poppler)
+      - name: Install OCR + .doc tools (tesseract, poppler, libreoffice)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-chi-tra poppler-utils
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-chi-tra poppler-utils libreoffice-writer
 
       - name: Install dependencies
         run: |
