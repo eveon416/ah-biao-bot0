@@ -255,23 +255,56 @@ def _doc_sources(doc_cands, limit=3):
             break
     return out
 
-FULL_DOC_CAP   = 24000   # 還原整份文件的字數上限（教學檔/流程檔用）
+FULL_DOC_CAP   = 28000   # 還原文件時單次餵給 LLM 的字數上限
 _CHUNK_OVERLAP = 150     # 與建索引一致，用來去除拼接重疊
 
-def fetch_full_doc(idx, ns, file_id):
-    """把某檔案的所有片段抓回來、依序拼成完整文件（給綜覽性問題用）。"""
+def _join_chunks(texts):
+    if not texts:
+        return ""
+    out = [texts[0]]
+    for t in texts[1:]:        # 後續片段去掉與前一段重疊的開頭
+        out.append(t[_CHUNK_OVERLAP:])
+    return "".join(out)
+
+def fetch_full_doc(idx, ns, file_id, focus=None):
+    """還原檔案內容餵給 LLM：
+    - 有 focus（命中的 chunk_idx 集合）→ 以命中段落為中心向兩側擴展成一段連續內容，
+      確保長文件中『真正相關的條文段落』一定被涵蓋，而不是只取開頭就被上限截斷。
+    - 沒 focus（綜覽性需求）→ 從頭拼接。
+    兩者都受 FULL_DOC_CAP 約束。top_k 拉高以支援數百片段的長法規/契約檔。"""
     try:
-        res = idx.query(vector=[0.001] * 512, top_k=300, include_metadata=True,
+        res = idx.query(vector=[0.001] * 512, top_k=1000, include_metadata=True,
                         namespace=ns, filter={"file_id": {"$eq": file_id}})
         chunks = sorted(res.get("matches", []),
                         key=lambda m: m.get("metadata", {}).get("chunk_idx", 0))
         if not chunks:
             return "", ""
-        src = chunks[0].get("metadata", {}).get("source", "文件")
-        parts = [chunks[0].get("metadata", {}).get("text", "")]
-        for m in chunks[1:]:   # 後續片段去掉與前一段重疊的開頭
-            parts.append(m.get("metadata", {}).get("text", "")[_CHUNK_OVERLAP:])
-        return "".join(parts)[:FULL_DOC_CAP], src
+        src   = chunks[0].get("metadata", {}).get("source", "文件")
+        texts = [m.get("metadata", {}).get("text", "") for m in chunks]
+        net   = [len(texts[0])] + [max(0, len(t) - _CHUNK_OVERLAP) for t in texts[1:]]
+
+        if focus:
+            pos_of = {m.get("metadata", {}).get("chunk_idx", i): i
+                      for i, m in enumerate(chunks)}
+            poss = sorted(pos_of[c] for c in focus if c in pos_of)
+            if poss:
+                lo, hi = poss[0], poss[-1]
+                cur = sum(net[lo:hi + 1])
+                while cur < FULL_DOC_CAP:               # 以命中段落為中心向外擴展
+                    grew = False
+                    if lo > 0:
+                        lo -= 1; cur += net[lo]; grew = True
+                        if cur >= FULL_DOC_CAP:
+                            break
+                    if hi < len(chunks) - 1:
+                        hi += 1; cur += net[hi]; grew = True
+                    if not grew:
+                        break
+                prefix = "" if lo == 0 else "…（前略）\n"
+                suffix = "" if hi == len(chunks) - 1 else "\n…（後略）"
+                return (prefix + _join_chunks(texts[lo:hi + 1]) + suffix)[:FULL_DOC_CAP + 12], src
+
+        return _join_chunks(texts)[:FULL_DOC_CAP], src
     except Exception as e:
         print(f"還原完整文件失敗：{e}")
         return "", ""
@@ -353,20 +386,28 @@ def answer_for_businesses(businesses, question):
 
     # 父文件還原：先放「最相關的文件」(依分數)，大綱命中檔再補上
     blocks, used_files = [], set()
-    fid_ns, ordered = {}, []
+    fid_ns, ordered, focus_by_fid = {}, [], {}
     for m in doc_cands:                      # 最相關文件優先
         fid = m.get("metadata", {}).get("file_id", "")
-        if fid and fid not in fid_ns:
+        if not fid:
+            continue
+        # 記錄此檔命中的片段位置，供「以相關段落為中心」還原長文件
+        cidx = m.get("metadata", {}).get("chunk_idx")
+        if cidx is not None:
+            focus_by_fid.setdefault(fid, set()).add(cidx)
+        if fid not in fid_ns:
             fid_ns[fid] = ns_by_id.get(m.get("id"), "")
             ordered.append(fid)
-    for fid, ns in outline_fids.items():     # 大綱命中檔補充
+    for fid, ns in outline_fids.items():     # 大綱命中檔補充（綜覽用，從頭還原）
         if fid not in fid_ns:
             fid_ns[fid] = ns
             ordered.append(fid)
     for fid in ordered[:3]:
-        full_text, full_src = fetch_full_doc(idx, fid_ns.get(fid, ""), fid)
+        full_text, full_src = fetch_full_doc(idx, fid_ns.get(fid, ""), fid,
+                                             focus=focus_by_fid.get(fid))
         if full_text:
-            blocks.append(f"【{full_src}（完整內容）】\n{full_text}")
+            tag = "完整內容" if fid in outline_fids and fid not in focus_by_fid else "相關段落"
+            blocks.append(f"【{full_src}（{tag}）】\n{full_text}")
             used_files.add(fid)
     for m in doc_cands:
         fid = m.get("metadata", {}).get("file_id", "")
@@ -488,10 +529,43 @@ def webhook():
 
     return "OK", 200
 
+def _run_diag():
+    # 暫時診斷：驗證「以相關段落為中心」的長文件還原，驗完即移除
+    q = request.args.get("q", "")
+    try:
+        idx = _get_index()
+        qv = _embed_many([q])
+        best, nsby = {}, {}
+        for ns in [""] + [b["namespace"] for b in BUSINESSES if b.get("namespace")]:
+            for m in _multi_query_docs(idx, qv, ns):
+                mid = m.get("id")
+                if mid not in best or m.get("score", 0) > best[mid].get("score", 0):
+                    best[mid] = m; nsby[mid] = ns
+        cands = sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)[:10]
+        if not cands:
+            return "（無命中）", 200
+        lines = [f"Q: {q}", "TOP:"]
+        for m in cands:
+            md = m.get("metadata", {})
+            lines.append(f"  {round(m.get('score',0),3)}  {md.get('source','')[:30]}  ci={md.get('chunk_idx')}")
+        top = cands[0]; fid = top.get("metadata", {}).get("file_id", ""); ns = nsby.get(top.get("id"), "")
+        focus = {m.get("metadata", {}).get("chunk_idx") for m in cands
+                 if m.get("metadata", {}).get("file_id") == fid}
+        full, src = fetch_full_doc(idx, ns, fid, focus=focus)
+        hit = top.get("metadata", {}).get("text", "")[:40]
+        lines += ["", f"TOPFILE: {src}", f"focus chunk_idx: {sorted(focus)}",
+                  f"還原字數: {len(full)}", f"命中片段文字含於還原? {hit in full}",
+                  f"HEAD: {full[:70]!r}", f"TAIL: {full[-70:]!r}"]
+        return "\n".join(lines), 200
+    except Exception as e:
+        return f"diag err: {e}", 200
+
 @app.route("/",            methods=["GET"])
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
+    if request.args.get("k", "") == "biao-diag-7x9":
+        return _run_diag()
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
