@@ -115,6 +115,11 @@ def sheet_delete_rows(tab, row_indices_zero_based):
             "startIndex": idx, "endIndex": idx + 1}}})
     _sheet_req("POST", f"{FAQ_SHEET_ID}:batchUpdate", {"requests": reqs})
 
+# 索引問題清單（無法索引的檔案，會寫到試算表「索引問題」分頁供使用者處理）
+_PROBLEMS = []
+def _report_problem(name, reason, size_mb=0):
+    _PROBLEMS.append({"name": name, "reason": reason, "size": round(size_mb, 1)})
+
 # ── Drive 掃描 / 取文字 ───────────────────────────────────────────────────────
 def list_files(service, folder_id, depth=0):
     files, page = [], None
@@ -127,24 +132,24 @@ def list_files(service, folder_id, depth=0):
             if f["mimeType"] == "application/vnd.google-apps.folder":
                 files.extend(list_files(service, f["id"], depth + 1))
             elif not should_skip(f["mimeType"]):
-                if int(f.get("size", 0)) / 1024 / 1024 <= MAX_FILE_MB:
+                size_mb = int(f.get("size", 0)) / 1024 / 1024
+                if size_mb <= MAX_FILE_MB:
                     files.append(f)
+                else:
+                    _report_problem(f["name"], f"檔案過大（{size_mb:.0f}MB，超過{MAX_FILE_MB}MB上限）→ 建議改放純文字版或拆檔", size_mb)
         page = resp.get("nextPageToken")
         if not page:
             break
     return files
 
 def _download(service, fid, export_mime=None, expected_size=0):
+    # 一次取回完整內容（避免分塊下載偶發截斷）
     if export_mime:
-        req = service.files().export_media(fileId=fid, mimeType=export_mime)
+        data = service.files().export_media(fileId=fid, mimeType=export_mime).execute()
     else:
-        req = service.files().get_media(fileId=fid)
-    buf = io.BytesIO()
-    dl = MediaIoBaseDownload(buf, req)
-    done = False
-    while not done:
-        _, done = dl.next_chunk()
-    data = buf.getvalue()
+        data = service.files().get_media(fileId=fid).execute()
+    if isinstance(data, str):
+        data = data.encode("utf-8")
     # 防靜默截斷：實際下載量明顯小於檔案大小 → 視為下載失敗（觸發重試）
     if expected_size and len(data) < int(expected_size) * 0.98:
         raise IOError(f"下載不完整：{len(data)}/{expected_size} bytes")
@@ -356,13 +361,17 @@ def index_drive(index, business, drive, done):
         if prev == fmod:                       # 已成功索引（有內容）
             continue
         # 暫時性錯誤的重試次數：值格式 err<N>:<modifiedTime>
+        sz_mb = int(f.get("size", 0)) / 1024 / 1024
         em = re.match(r"^err(\d+):(.*)$", prev) if prev else None
         retries = int(em.group(1)) if (em and em.group(2) == fmod) else 0
-        if retries >= 5:                       # 暫時性錯誤最多重試 5 次才放棄
+        if retries >= 5:                       # 暫時性錯誤最多重試 5 次才放棄 → 列入問題清單
+            _report_problem(f["name"], "讀取一直失敗（已重試5次）→ 建議檢查檔案或重新上傳", sz_mb)
             continue
         text = extract_text(drive, f)
         if text is None:                       # 暫時性錯誤（下載/解析爆錯）→ 記次數，下次再試
             done[fid] = f"err{retries+1}:{fmod}"
+            if retries + 1 >= 5:               # 這次達上限 → 列入問題清單
+                _report_problem(f["name"], "讀取一直失敗（已重試5次）→ 建議檢查檔案或重新上傳", sz_mb)
             print(f"  [{i}/{len(files)}] {f['name']} → 讀取錯誤（重試 {retries+1}/5）")
             save_ckpt(done)
             continue
@@ -373,11 +382,35 @@ def index_drive(index, business, drive, done):
                 upsert(index, ns, bc, embed([c["text"] for c in bc]), "doc")
             total += len(chunks)
             print(f"  [{i}/{len(files)}] {f['name']} → {len(chunks)} 片段")
-        else:
+        else:                                  # 抽不到任何文字 → 列入問題清單
+            _report_problem(f["name"], "取不到文字（可能是圖片型/空白檔，連OCR都讀不到）→ 建議改放可選取文字的版本", sz_mb)
             print(f"  [{i}/{len(files)}] {f['name']} → 真的沒文字（標記完成）")
         done[fid] = fmod                       # 有內容或確定空白 → 標記完成
         save_ckpt(done)
     return total
+
+# ── 把「索引問題清單」寫到試算表，供使用者處理 ────────────────────────────────
+def write_problem_report():
+    tab = "索引問題"
+    header = ["檔名", "問題", "大小(MB)", "偵測時間"]
+    try:
+        meta = _sheet_req("GET", f"{FAQ_SHEET_ID}?fields=sheets.properties.title")
+        tabs = [s["properties"]["title"] for s in meta.get("sheets", [])]
+        if tab not in tabs:
+            _sheet_req("POST", f"{FAQ_SHEET_ID}:batchUpdate",
+                       {"requests": [{"addSheet": {"properties": {"title": tab,
+                        "gridProperties": {"frozenRowCount": 1}}}}]})
+        # 清空舊內容後重寫（反映目前狀態，已解決的會自動消失）
+        rng = urllib.parse.quote(f"{tab}!A1:D5000")
+        _sheet_req("POST", f"{FAQ_SHEET_ID}/values/{rng}:clear", {})
+        ts = now_tw_date()
+        rows = [header] + [[p["name"], p["reason"], p["size"], ts] for p in _PROBLEMS]
+        _sheet_req("PUT",
+                   f"{FAQ_SHEET_ID}/values/{urllib.parse.quote(tab + '!A1')}?valueInputOption=RAW",
+                   {"values": rows})
+        print(f"  📋 索引問題清單已更新：{len(_PROBLEMS)} 個檔案需處理")
+    except Exception as e:
+        print(f"  ⚠ 寫入索引問題清單失敗：{e}")
 
 # ── 步驟三：索引正式分頁的 FAQ ───────────────────────────────────────────────
 def index_faq(index, business):
@@ -510,6 +543,8 @@ def main():
             continue
         n_doc = index_drive(index, b, drive, done)
         print(f"  ✅ {b['name']}：FAQ {n_faq} 筆，文件片段 +{n_doc}")
+
+    write_problem_report()   # 把無法索引的檔案列到試算表「索引問題」分頁
 
     stats = index.describe_index_stats()
     print(f"\n🎉 完成！總向量數：{stats.total_vector_count}")
