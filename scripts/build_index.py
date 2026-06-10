@@ -306,25 +306,34 @@ def save_ckpt(d):
     os.makedirs(os.path.dirname(CKPT), exist_ok=True)
     with open(CKPT, "w") as f: json.dump(d, f)
 
-# ── 步驟一：同步已審查 → 正式分頁 ─────────────────────────────────────────────
+# ── 步驟一：同步已審查 → 正式分頁（掃描 待審核 + 其他素材）──────────────────────
+PROMOTE_SOURCE_TABS = [REVIEW_TAB, "其他素材"]
+
 def promote_reviewed(business):
-    rows = sheet_read(REVIEW_TAB)
-    if not rows:
-        return
-    move, del_idx = [], []
-    for i in range(1, len(rows)):
-        r = (rows[i] + [""] * 10)[:10]
-        biz, status = r[1].strip(), r[8].strip()
-        if biz == business["name"] and status == "已審查":
-            today = now_tw_date()
-            r[6] = r[6] or today      # 審核日期
-            r[7] = today              # 最後更新日期
-            move.append(r)
-            del_idx.append(i)         # 0-based 列索引（含表頭為第0列）
-    if move:
-        sheet_append(business["sheet_tab"], move)
-        sheet_delete_rows(REVIEW_TAB, del_idx)
-        print(f"  ➡ 已將 {len(move)} 筆已審查 FAQ 搬到「{business['sheet_tab']}」分頁")
+    """從來源分頁把『業務類別=本業務 且 狀態=已審查』的列，搬到本業務正式分頁。"""
+    for src_tab in PROMOTE_SOURCE_TABS:
+        if src_tab == business["sheet_tab"]:
+            continue
+        try:
+            rows = sheet_read(src_tab)
+        except Exception:
+            continue
+        if not rows:
+            continue
+        move, del_idx = [], []
+        for i in range(1, len(rows)):
+            r = (rows[i] + [""] * 10)[:10]
+            biz, status = r[1].strip(), r[8].strip()
+            if biz == business["name"] and status == "已審查":
+                today = now_tw_date()
+                r[6] = r[6] or today
+                r[7] = today
+                move.append(r)
+                del_idx.append(i)
+        if move:
+            sheet_append(business["sheet_tab"], move)
+            sheet_delete_rows(src_tab, del_idx)
+            print(f"  ➡ 從「{src_tab}」搬 {len(move)} 筆到「{business['sheet_tab']}」")
 
 # ── 步驟二：索引 Drive 資料夾 ────────────────────────────────────────────────
 def index_drive(index, business, drive, done):
