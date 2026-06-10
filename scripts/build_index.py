@@ -181,13 +181,24 @@ def _ocr_pdf(raw, name):
         print(f"  ⚠ OCR 失敗 {name}: {e}")
         return ""
 
+def _docx_paras(doc):
+    """最保險的純段落讀法（與舊版相同，當作後備）。"""
+    return "\n".join(p.text for p in doc.paragraphs)
+
 def _docx_text(raw, name):
-    """讀 .docx：段落 + 表格（依文件順序），避免漏掉放在表格內的法條/契約條款。"""
+    """讀 .docx：段落 + 表格（依文件順序），避免漏掉放在表格內的法條/契約條款。
+    表格走訪若因 python-docx 版本等問題出錯，會自動退回純段落讀法，絕不回傳空字串。"""
     try:
         from docx import Document
+        doc = Document(io.BytesIO(raw))
+    except Exception as e:
+        print(f"  ⚠ DOCX 開檔失敗 {name}: {e}")
+        return ""
+
+    # 先嘗試「段落+表格依序」的完整抽取
+    try:
         from docx.table import Table
         from docx.text.paragraph import Paragraph
-        doc = Document(io.BytesIO(raw))
 
         def cell_text(cell):
             return " ".join(p.text for p in cell.paragraphs if p.text.strip())
@@ -202,7 +213,6 @@ def _docx_text(raw, name):
             return "\n".join(lines)
 
         parts = []
-        # 依 body 內元素順序走訪，段落與表格交錯都不漏
         for child in doc.element.body.iterchildren():
             tag = child.tag.split("}")[-1]
             if tag == "p":
@@ -213,14 +223,21 @@ def _docx_text(raw, name):
                 t = table_text(Table(child, doc))
                 if t.strip():
                     parts.append(t)
-        text = "\n".join(parts)
-        # 後備：若上面意外抓不到（極少數結構），退回純段落
-        if not text.strip():
-            text = "\n".join(p.text for p in doc.paragraphs)
-        return text
+        full = "\n".join(parts)
+        paras = _docx_paras(doc)
+        # 取內容較多者，避免任何情況下比舊版還少
+        text = full if len(full.strip()) >= len(paras.strip()) else paras
+        if text.strip():
+            return text
+        return paras
     except Exception as e:
-        print(f"  ⚠ DOCX 失敗 {name}: {e}")
-        return ""
+        # 表格走訪失敗 → 退回純段落（等同舊版行為，不退化為空）
+        print(f"  ⚠ DOCX 表格抽取失敗，改用純段落 {name}: {e}")
+        try:
+            return _docx_paras(doc)
+        except Exception as e2:
+            print(f"  ⚠ DOCX 純段落也失敗 {name}: {e2}")
+            return ""
 
 def _doc_text(raw, name):
     """舊版 .doc：python-docx 讀不了，用 LibreOffice 轉純文字（中文友善）。"""
