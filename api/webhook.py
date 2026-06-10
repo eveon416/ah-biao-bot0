@@ -322,11 +322,6 @@ def answer_for_businesses(businesses, question):
                     best[mid] = m
                     ns_by_id[mid] = ns
         doc_cands = sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)
-        if "DEBUGRET" in question:   # 暫時診斷：回傳實際撈到的文件（測完移除）
-            dbg = "查詢變體：" + " | ".join(queries) + "\n撈到：\n" + "\n".join(
-                f"{round(m.get('score',0),3)}  {m.get('metadata',{}).get('source','')[:30]}"
-                for m in doc_cands[:10])
-            return dbg, ""
     except Exception as e:
         if rel == "RELATED" and fi >= 0:
             return faqs[fi]["a"].rstrip() + "\n\n（來源：本局 FAQ）", "命中FAQ"
@@ -341,7 +336,7 @@ def answer_for_businesses(businesses, question):
         return ("這個問題我在現有資料中找不到答案 😥\n建議您洽詢相關業務承辦人確認。"
                 "（您的問題已記錄，將供日後補充進知識庫）"), "未解答"
 
-    # 大綱命中 → 優先還原該教學檔
+    # 大綱命中（門檻提高，避免低分大綱誤搶名額）→ 作為「補充」
     outline_fids = {}   # fid -> ns
     try:
         for ns in ns_list:
@@ -349,21 +344,24 @@ def answer_for_businesses(businesses, question):
                 ores = idx.query(vector=ov, top_k=3, include_metadata=True, namespace=ns,
                                  filter={"source_type": {"$eq": "outline"}})
                 for m in ores.get("matches", []):
-                    if m.get("score", 0) > 0.45:
+                    if m.get("score", 0) > 0.55:
                         fid = m.get("metadata", {}).get("file_id", "")
                         if fid and fid not in outline_fids:
                             outline_fids[fid] = ns
     except Exception as e:
         print(f"大綱檢索略過：{e}")
 
-    # 父文件還原（大綱命中檔 + 最相關檔），各自用所屬 namespace
+    # 父文件還原：先放「最相關的文件」(依分數)，大綱命中檔再補上
     blocks, used_files = [], set()
-    fid_ns = dict(outline_fids)
-    ordered = list(outline_fids.keys())
-    for m in doc_cands:
+    fid_ns, ordered = {}, []
+    for m in doc_cands:                      # 最相關文件優先
         fid = m.get("metadata", {}).get("file_id", "")
         if fid and fid not in fid_ns:
             fid_ns[fid] = ns_by_id.get(m.get("id"), "")
+            ordered.append(fid)
+    for fid, ns in outline_fids.items():     # 大綱命中檔補充
+        if fid not in fid_ns:
+            fid_ns[fid] = ns
             ordered.append(fid)
     for fid in ordered[:3]:
         full_text, full_src = fetch_full_doc(idx, fid_ns.get(fid, ""), fid)
