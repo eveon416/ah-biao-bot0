@@ -557,22 +557,10 @@ def webhook():
 
     return "OK", 200
 
-def _run_diag():
-    # 暫時：跑完整回答流程驗證（驗完移除）
-    q = request.args.get("q", "")
-    try:
-        ans, warns = answer_for_businesses(BUSINESSES, q)
-        return f"[warns={warns}]\n{ans}", 200
-    except Exception as e:
-        import traceback
-        return f"diag err: {e}\n{traceback.format_exc()}", 200
-
 @app.route("/",            methods=["GET"])
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
-    if request.args.get("k", "") == "biao-diag-7x9":
-        return _run_diag()
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
