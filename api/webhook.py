@@ -429,6 +429,8 @@ def answer_for_businesses(businesses, question):
     prompt = (
         f"你是花蓮縣衛生局的業務助理。{instr}\n"
         "用繁體中文、語氣親切專業。\n"
+        "【重要】輸出純文字，不要使用任何 Markdown 符號（不要用 **、*、###、- 等）；"
+        "需要分點時用「一、二、三」或「1. 2. 3.」或「・」開頭即可。\n"
         "若是綜覽性、流程性問題，請完整有條理地回答（可分階段、分點），"
         "先給整體架構；內容很多時最後主動說明可針對哪部分再深入詢問。\n"
         "若標準答案與文件都無法回答，最後另起一行單獨輸出 [NOTFOUND]。\n"
@@ -447,6 +449,7 @@ def answer_for_businesses(businesses, question):
             "你是花蓮縣衛生局的業務助理。下面是與問題最相關的內部資料。\n"
             "請盡量根據這些資料整理出對使用者有幫助的回答：即使只部分相關，也要說明"
             "資料中有提到的重點，並指出哪些部分資料未涵蓋。用繁體中文、條理清楚。\n"
+            "輸出純文字，不要使用 Markdown 符號（不要用 **、*、###）。\n"
             "只有在資料『完全沒有任何相關資訊』時，才另起一行單獨輸出 [NOTFOUND]。\n\n"
             f"{faq_ctx}資料內容：\n{doc_block}\n\n問題：{question}\n\n回答：")
         try:
@@ -472,6 +475,28 @@ def answer_for_businesses(businesses, question):
     return answer, warns
 
 # ── LINE ─────────────────────────────────────────────────────────────────────
+def _strip_md(text: str) -> str:
+    """LINE 不支援 Markdown：把 **粗體**、### 標題、* 項目符號等轉成純文字，
+    避免畫面出現一堆 * 和 # 符號。"""
+    if not text:
+        return text
+    out = []
+    for ln in text.split("\n"):
+        s = re.sub(r"^\s{0,3}#{1,6}\s*", "", ln)        # 標題 ### → 去掉井號
+        s = re.sub(r"^(\s*)[\*\-\+•]\s+", r"\1・", s)     # 項目符號 *,-,+ → ・
+        s = re.sub(r"^(\s*)\d+\.\s+", lambda m: m.group(0), s)  # 數字清單保留
+        out.append(s)
+    s = "\n".join(out)
+    s = re.sub(r"\*\*\*(.+?)\*\*\*", r"\1", s)           # ***粗斜***
+    s = re.sub(r"\*\*(.+?)\*\*", r"\1", s)               # **粗體**
+    s = re.sub(r"__(.+?)__", r"\1", s)                   # __粗體__
+    s = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"\1", s)  # *斜體*
+    s = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1（\2）", s)  # [文字](連結) → 文字（連結）
+    s = s.replace("`", "")                                # 行內 code 反引號
+    s = s.replace("**", "").replace("##", "")             # 殘留標記
+    s = re.sub(r"\n{3,}", "\n\n", s)                      # 收斂多餘空行
+    return s.strip()
+
 def _verify_sig(body: bytes, sig: str) -> bool:
     if not LINE_CHANNEL_SECRET:
         return True
@@ -479,6 +504,7 @@ def _verify_sig(body: bytes, sig: str) -> bool:
     return hmac.compare_digest(base64.b64encode(mac).decode(), sig)
 
 def _reply(token: str, text: str):
+    text = _strip_md(text)
     payload = json.dumps({"replyToken": token,
                           "messages": [{"type": "text", "text": text[:5000]}]}).encode()
     req = urllib.request.Request(LINE_REPLY_URL, data=payload, method="POST",
@@ -557,10 +583,21 @@ def webhook():
 
     return "OK", 200
 
+def _run_diag():
+    q = request.args.get("q", "")
+    try:
+        ans, warns = answer_for_businesses(BUSINESSES, q)
+        return f"[warns={warns}][送出版本=經_strip_md]\n{_strip_md(ans)}", 200
+    except Exception as e:
+        import traceback
+        return f"diag err: {e}\n{traceback.format_exc()}", 200
+
 @app.route("/",            methods=["GET"])
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
+    if request.args.get("k", "") == "biao-diag-7x9":
+        return _run_diag()
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
