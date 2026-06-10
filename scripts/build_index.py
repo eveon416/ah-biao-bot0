@@ -134,7 +134,7 @@ def list_files(service, folder_id, depth=0):
             break
     return files
 
-def _download(service, fid, export_mime=None):
+def _download(service, fid, export_mime=None, expected_size=0):
     if export_mime:
         req = service.files().export_media(fileId=fid, mimeType=export_mime)
     else:
@@ -144,7 +144,11 @@ def _download(service, fid, export_mime=None):
     done = False
     while not done:
         _, done = dl.next_chunk()
-    return buf.getvalue()
+    data = buf.getvalue()
+    # 防靜默截斷：實際下載量明顯小於檔案大小 → 視為下載失敗（觸發重試）
+    if expected_size and len(data) < int(expected_size) * 0.98:
+        raise IOError(f"下載不完整：{len(data)}/{expected_size} bytes")
+    return data
 
 def _pdf_text(raw, name):
     try:
@@ -220,6 +224,7 @@ XLSX_MIMES = {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 
 def extract_text(service, f):
     mime, fid, name = f["mimeType"], f["id"], f["name"]
+    sz = f.get("size", 0)   # 二進位檔的大小，用來驗證下載完整性
     try:
         if mime == "application/vnd.google-apps.document":
             return _download(service, fid, "text/plain").decode("utf-8", "ignore")
@@ -228,19 +233,19 @@ def extract_text(service, f):
         if mime == "application/vnd.google-apps.presentation":
             return _download(service, fid, "text/plain").decode("utf-8", "ignore")
         if mime == "application/pdf":
-            raw = _download(service, fid)
+            raw = _download(service, fid, expected_size=sz)
             text = _pdf_text(raw, name)
             if len((text or "").strip()) < OCR_MIN_TEXT:   # 疑似掃描檔 → OCR
                 text = _ocr_pdf(raw, name) or text
             return text
         if mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-            return _docx_text(_download(service, fid), name)
+            return _docx_text(_download(service, fid, expected_size=sz), name)
         if mime == "application/msword":          # 舊版 .doc
-            return _doc_text(_download(service, fid), name)
+            return _doc_text(_download(service, fid, expected_size=sz), name)
         if mime in XLSX_MIMES:
-            return _xlsx_text(_download(service, fid), name)
+            return _xlsx_text(_download(service, fid, expected_size=sz), name)
         if mime.startswith("text/"):
-            return _download(service, fid).decode("utf-8", "ignore")
+            return _download(service, fid, expected_size=sz).decode("utf-8", "ignore")
     except Exception as e:
         print(f"  ⚠ 讀取失敗（暫時性，將重試）{name}: {e}")
         return None          # 例外＝暫時性錯誤 → 回 None 讓上層重試
