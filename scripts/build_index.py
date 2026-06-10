@@ -182,9 +182,42 @@ def _ocr_pdf(raw, name):
         return ""
 
 def _docx_text(raw, name):
+    """讀 .docx：段落 + 表格（依文件順序），避免漏掉放在表格內的法條/契約條款。"""
     try:
         from docx import Document
-        return "\n".join(p.text for p in Document(io.BytesIO(raw)).paragraphs)
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+        doc = Document(io.BytesIO(raw))
+
+        def cell_text(cell):
+            return " ".join(p.text for p in cell.paragraphs if p.text.strip())
+
+        def table_text(tbl):
+            lines = []
+            for row in tbl.rows:
+                cells = [cell_text(c).strip() for c in row.cells]
+                line = " | ".join(c for c in cells if c)
+                if line:
+                    lines.append(line)
+            return "\n".join(lines)
+
+        parts = []
+        # 依 body 內元素順序走訪，段落與表格交錯都不漏
+        for child in doc.element.body.iterchildren():
+            tag = child.tag.split("}")[-1]
+            if tag == "p":
+                t = Paragraph(child, doc).text
+                if t.strip():
+                    parts.append(t)
+            elif tag == "tbl":
+                t = table_text(Table(child, doc))
+                if t.strip():
+                    parts.append(t)
+        text = "\n".join(parts)
+        # 後備：若上面意外抓不到（極少數結構），退回純段落
+        if not text.strip():
+            text = "\n".join(p.text for p in doc.paragraphs)
+        return text
     except Exception as e:
         print(f"  ⚠ DOCX 失敗 {name}: {e}")
         return ""
