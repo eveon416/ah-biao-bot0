@@ -7,7 +7,17 @@
       "key": "採購",
       "name": "採購",
       "enabled": true,
-      "keywords": ["採購", "招標", "標案", "決標", "底價", "驗收", "履約", "監造", "竣工"],
+      "keywords": [
+        "採購",
+        "招標",
+        "標案",
+        "決標",
+        "底價",
+        "驗收",
+        "履約",
+        "監造",
+        "竣工"
+      ],
       "drive_folder_id": "18-aKWluYmR2-A59ATtWb90wFnimpo_Cu",
       "sheet_tab": "採購",
       "namespace": ""
@@ -16,28 +26,61 @@
       "key": "總務",
       "name": "總務",
       "enabled": true,
-      "keywords": ["總務", "庶務", "公務車", "派車", "場地", "租借", "水電", "事務機", "影印機"],
+      "keywords": [
+        "總務",
+        "庶務",
+        "公務車",
+        "派車",
+        "場地",
+        "租借",
+        "水電",
+        "事務機",
+        "影印機"
+      ],
       "drive_folder_id": "",
       "sheet_tab": "總務",
-      "namespace": "總務"
+      "namespace": "zongwu"
     },
     {
       "key": "人事",
       "name": "人事",
       "enabled": true,
-      "keywords": ["人事", "考勤", "差勤", "差假", "請假", "薪資", "勞健保", "加保", "退休", "聘僱", "約僱", "到職", "離職", "獎懲"],
+      "keywords": [
+        "人事",
+        "考勤",
+        "差勤",
+        "差假",
+        "請假",
+        "薪資",
+        "勞健保",
+        "加保",
+        "退休",
+        "聘僱",
+        "約僱",
+        "到職",
+        "離職",
+        "獎懲"
+      ],
       "drive_folder_id": "",
       "sheet_tab": "人事",
-      "namespace": "人事"
+      "namespace": "renshi"
     },
     {
       "key": "公文檔管",
       "name": "公文檔管",
       "enabled": true,
-      "keywords": ["公文", "檔管", "檔案管理", "歸檔", "收發", "點收", "文書"],
+      "keywords": [
+        "公文",
+        "檔管",
+        "檔案管理",
+        "歸檔",
+        "收發",
+        "點收",
+        "文書"
+      ],
       "drive_folder_id": "",
       "sheet_tab": "公文檔管",
-      "namespace": "公文檔管"
+      "namespace": "gongwen"
     }
   ]
 }
