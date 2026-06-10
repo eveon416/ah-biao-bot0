@@ -372,6 +372,8 @@ def index_drive(index, business, drive, done):
 # ── 步驟三：索引正式分頁的 FAQ ───────────────────────────────────────────────
 def index_faq(index, business):
     ns = business["namespace"]
+    # Pinecone 向量 ID 只能是 ASCII：namespace 含中文時用雜湊；ns="" 保留原規則（採購不重複）
+    ns_tag = "" if not ns else hashlib.md5(ns.encode()).hexdigest()[:8]
     rows = sheet_read(business["sheet_tab"])
     items = []
     for i in range(1, len(rows)):
@@ -380,7 +382,7 @@ def index_faq(index, business):
         if not q or not a:
             continue
         items.append({
-            "id": f"faq-{ns}-" + hashlib.md5((num or q).encode()).hexdigest(),
+            "id": f"faq-{ns_tag}-" + hashlib.md5((num or q).encode()).hexdigest(),
             "text": f"問：{q}\n答：{a}", "source": f"FAQ：{q}",
             "meta_extra": {"faq_answer": a[:3000], "faq_question": q[:500]},
         })
