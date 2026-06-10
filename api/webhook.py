@@ -488,11 +488,8 @@ def webhook():
 
     return "OK", 200
 
-@app.route("/api/diag", methods=["GET"])
-def diag():
-    # 暫時診斷端點（驗證 docx 表格抽取與檢索），驗完即移除
-    if request.args.get("k", "") != "biao-diag-7x9":
-        return "no", 403
+def _run_diag():
+    # 暫時診斷（驗證 docx 表格抽取與檢索），驗完即移除
     q = request.args.get("q", "返鄉交通補助費的申請資格")
     fid = request.args.get("fid", "")
     try:
@@ -524,6 +521,8 @@ def diag():
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
+    if request.args.get("k", "") == "biao-diag-7x9":
+        return _run_diag()
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
