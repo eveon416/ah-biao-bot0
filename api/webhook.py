@@ -310,16 +310,17 @@ def answer_for_businesses(businesses, question):
         if ns not in ns_list:
             ns_list.append(ns)
     doc_cands, qvecs = [], []
+    ns_by_id = {}      # 向量id → 所屬 namespace（不直接改動 Pinecone 物件）
     try:
         idx = _get_index()
         qvecs = _embed_many(queries)
         best = {}
         for ns in ns_list:
             for m in _multi_query_docs(idx, qvecs, ns):
-                m["_ns"] = ns
                 mid = m.get("id")
                 if mid not in best or m.get("score", 0) > best[mid].get("score", 0):
                     best[mid] = m
+                    ns_by_id[mid] = ns
         doc_cands = sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)
     except Exception as e:
         if rel == "RELATED" and fi >= 0:
@@ -357,7 +358,7 @@ def answer_for_businesses(businesses, question):
     for m in doc_cands:
         fid = m.get("metadata", {}).get("file_id", "")
         if fid and fid not in fid_ns:
-            fid_ns[fid] = m.get("_ns", "")
+            fid_ns[fid] = ns_by_id.get(m.get("id"), "")
             ordered.append(fid)
     for fid in ordered[:3]:
         full_text, full_src = fetch_full_doc(idx, fid_ns.get(fid, ""), fid)
