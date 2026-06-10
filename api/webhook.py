@@ -488,6 +488,38 @@ def webhook():
 
     return "OK", 200
 
+@app.route("/api/diag", methods=["GET"])
+def diag():
+    # 暫時診斷端點（驗證 docx 表格抽取與檢索），驗完即移除
+    if request.args.get("k", "") != "biao-diag-7x9":
+        return "no", 403
+    q = request.args.get("q", "返鄉交通補助費的申請資格")
+    fid = request.args.get("fid", "")
+    try:
+        idx = _get_index()
+        out = []
+        if fid:
+            for ns in ([""] + [b["namespace"] for b in BUSINESSES if b.get("namespace")]):
+                t, s = fetch_full_doc(idx, ns, fid)
+                if t:
+                    out.append(f"[ns='{ns}'] {s}\n  字數={len(t)}  含表格分隔='|':{('|' in t)}  片頭={t[:60]!r}")
+            return "FILE DUMP\n" + ("\n".join(out) or "(找不到該檔)"), 200
+        qv = _embed_many([q])
+        best = {}
+        for ns in [""] + [b["namespace"] for b in BUSINESSES if b.get("namespace")]:
+            for m in _multi_query_docs(idx, qv, ns):
+                mid = m.get("id")
+                if mid not in best or m.get("score", 0) > best[mid].get("score", 0):
+                    best[mid] = m
+        cands = sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)[:10]
+        lines = [f"Q: {q}", "TOP DOCS:"]
+        for m in cands:
+            md = m.get("metadata", {})
+            lines.append(f"  {round(m.get('score',0),3)}  {md.get('source','')[:34]}  fid={md.get('file_id','')[:12]}")
+        return "\n".join(lines), 200
+    except Exception as e:
+        return f"diag err: {e}", 200
+
 @app.route("/",            methods=["GET"])
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
