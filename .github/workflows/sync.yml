@@ -4,6 +4,13 @@ on:
   schedule:
     - cron: "0 19 * * *"   # 每天 UTC 19:00（台灣時間隔日 03:00）
   workflow_dispatch:
+  push:
+    paths:
+      - 'data/reindex_trigger'   # 改動此檔即可手動觸發重建（免 API 權杖）
+
+concurrency:
+  group: kb-sync          # 同時間只跑一個同步，避免併發互搶
+  cancel-in-progress: false
 
 jobs:
   build-index:
