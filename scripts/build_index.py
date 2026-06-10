@@ -274,8 +274,53 @@ def _xlsx_text(raw, name):
         print(f"  ⚠ XLSX 失敗 {name}: {e}")
         return ""
 
+def _pptx_text(raw, name):
+    """讀 .pptx：每張投影片的文字方塊與表格（含備忘稿）。"""
+    try:
+        from pptx import Presentation
+        prs = Presentation(io.BytesIO(raw))
+        out = []
+
+        def shape_text(shp):
+            parts = []
+            if shp.has_text_frame:
+                for p in shp.text_frame.paragraphs:
+                    t = "".join(r.text for r in p.runs)
+                    if t.strip():
+                        parts.append(t)
+            if shp.has_table:
+                for row in shp.table.rows:
+                    cells = [c.text.strip() for c in row.cells]
+                    line = " | ".join(c for c in cells if c)
+                    if line:
+                        parts.append(line)
+            # 群組圖形遞迴
+            if shp.shape_type == 6:  # GROUP
+                for s in shp.shapes:
+                    parts.extend(shape_text(s))
+            return parts
+
+        for i, slide in enumerate(prs.slides, 1):
+            sp = []
+            for shp in slide.shapes:
+                try:
+                    sp.extend(shape_text(shp))
+                except Exception:
+                    pass
+            if slide.has_notes_slide:
+                nt = slide.notes_slide.notes_text_frame.text
+                if nt and nt.strip():
+                    sp.append("（備忘稿）" + nt.strip())
+            if sp:
+                out.append(f"投影片 {i}：\n" + "\n".join(sp))
+        return "\n\n".join(out)
+    except Exception as e:
+        print(f"  ⚠ PPTX 失敗 {name}: {e}")
+        return ""
+
 XLSX_MIMES = {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
               "application/vnd.ms-excel"}
+PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 def extract_text(service, f):
     mime, fid, name = f["mimeType"], f["id"], f["name"]
@@ -297,6 +342,8 @@ def extract_text(service, f):
             return _docx_text(_download(service, fid, expected_size=sz), name)
         if mime == "application/msword":          # 舊版 .doc
             return _doc_text(_download(service, fid, expected_size=sz), name)
+        if mime == PPTX_MIME:
+            return _pptx_text(_download(service, fid, expected_size=sz), name)
         if mime in XLSX_MIMES:
             return _xlsx_text(_download(service, fid, expected_size=sz), name)
         if mime.startswith("text/"):
