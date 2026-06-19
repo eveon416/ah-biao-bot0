@@ -42,17 +42,21 @@ def gemini_embed(texts):
     body = json.dumps({"requests": reqs}).encode()
     url = ("https://generativelanguage.googleapis.com/v1beta/"
            f"models/gemini-embedding-001:batchEmbedContents?key={GKEY}")
-    last = ""
-    for _ in range(6):
+    delay, last = 4, ""
+    for _ in range(10):
         try:
             req = urllib.request.Request(url, data=body,
                                          headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=120) as r:
+            with urllib.request.urlopen(req, timeout=180) as r:
                 j = json.loads(r.read())
-            return [_l2(e["values"]) for e in j["embeddings"]]
+            embs = j.get("embeddings")
+            if not embs or len(embs) != len(texts):
+                raise RuntimeError("回應不完整：" + json.dumps(j)[:160])
+            return [_l2(e["values"]) for e in embs]
         except Exception as e:
-            last = str(e)
-            time.sleep(6)
+            last = str(e)[:160]
+            time.sleep(delay)
+            delay = min(delay * 1.8, 60)      # 指數退避，撞 429 也撐得住
     raise RuntimeError(f"Gemini 嵌入失敗：{last}")
 
 def text_for(md):
@@ -79,14 +83,16 @@ def reembed_ns(ns):
     items = list(found.items())
     print(f"  ns='{ns}'：唯一向量 {len(items)}", flush=True)
     done = 0
-    for i in range(0, len(items), 100):
-        batch = items[i:i+100]
+    for i in range(0, len(items), 50):           # 小批次，降低單次負載
+        batch = items[i:i+50]
         embs = gemini_embed([text_for(md) for _, md in batch])
         ups = [{"id": vid, "values": e, "metadata": md}
                for (vid, md), e in zip(batch, embs)]
         idx.upsert(vectors=ups, namespace=ns)
         done += len(ups)
-        print(f"    重嵌 {done}/{len(items)}", flush=True)
+        if done % 500 == 0 or done == len(items):
+            print(f"    重嵌 {done}/{len(items)}", flush=True)
+        time.sleep(0.5)                          # 放慢節奏，避免撞流量上限
     return done
 
 def main():
