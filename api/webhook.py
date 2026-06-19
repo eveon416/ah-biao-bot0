@@ -391,15 +391,21 @@ def answer_for_businesses(businesses, question):
     # 父文件還原：先放「最相關的文件」(依分數)，大綱命中檔再補上
     blocks, used_files = [], set()
     fid_ns, ordered, focus_by_fid = {}, [], {}
+    seen_src = set()                         # 同檔名（雲端有重複副本）只保留一份，不浪費名額
     for m in doc_cands:                      # 最相關文件優先
-        fid = m.get("metadata", {}).get("file_id", "")
+        md = m.get("metadata", {})
+        fid = md.get("file_id", "")
         if not fid:
             continue
         # 記錄此檔命中的片段位置，供「以相關段落為中心」還原長文件
-        cidx = m.get("metadata", {}).get("chunk_idx")
+        cidx = md.get("chunk_idx")
         if cidx is not None:
             focus_by_fid.setdefault(fid, set()).add(cidx)
         if fid not in fid_ns:
+            src = md.get("source", "")
+            if src and src in seen_src:       # 已有同名檔 → 跳過這份副本
+                continue
+            seen_src.add(src)
             fid_ns[fid] = ns_by_id.get(m.get("id"), "")
             ordered.append(fid)
     for fid, ns in outline_fids.items():     # 大綱命中檔補充（綜覽用，從頭還原）
@@ -414,12 +420,14 @@ def answer_for_businesses(businesses, question):
             blocks.append(f"【{full_src}（{tag}）】\n{full_text}")
             used_files.add(fid)
     for m in doc_cands:
-        fid = m.get("metadata", {}).get("file_id", "")
-        if fid in used_files:
+        md = m.get("metadata", {})
+        fid = md.get("file_id", "")
+        src = md.get("source", "")
+        if fid in used_files or (src and src in seen_src):
             continue
         used_files.add(fid)
-        md = m.get("metadata", {})
-        blocks.append(f"【{md.get('source','文件')}】\n{md.get('text','')}")
+        seen_src.add(src)
+        blocks.append(f"【{src or '文件'}】\n{md.get('text','')}")
         if len(blocks) >= 4:
             break
     doc_block = "\n\n---\n\n".join(blocks) or "（無相關文件）"
@@ -586,6 +594,13 @@ def webhook():
 def _run_diag():
     idx = _get_index()
     all_ns = [""] + [b["namespace"] for b in BUSINESSES if b.get("namespace")]
+    if request.args.get("ans", ""):   # 跑完整回答流程（看實際送出版本）
+        try:
+            a, w = answer_for_businesses(BUSINESSES, request.args.get("q", ""))
+            return f"[warns={w}]\n{_strip_md(a)}", 200
+        except Exception as e:
+            import traceback
+            return f"ans err: {e}\n{traceback.format_exc()}", 200
     countfid = request.args.get("countfid", "")
     if countfid:   # 確定某 file_id 在各 namespace 索引了幾個片段
         out = []
