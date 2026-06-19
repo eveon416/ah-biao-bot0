@@ -603,10 +603,50 @@ def webhook():
 
     return "OK", 200
 
+def _run_diag():
+    # 暫時：檢視實際餵給 LLM 的文件內容 / 找特定關鍵字在還原文中的位置（驗完移除）
+    q = request.args.get("q", "")
+    find = request.args.get("find", "")     # 在還原文中找這個關鍵字並回報位置
+    try:
+        idx = _get_index()
+        all_ns = [""] + [b["namespace"] for b in BUSINESSES if b.get("namespace")]
+        qv = _embed_many([q])
+        best, nsby = {}, {}
+        for ns in all_ns:
+            for m in _multi_query_docs(idx, qv, ns):
+                mid = m.get("id")
+                if mid not in best or m.get("score", 0) > best[mid].get("score", 0):
+                    best[mid] = m; nsby[mid] = ns
+        cands = sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)
+        seen, ordered, focus = set(), [], {}
+        for m in cands:
+            md = m.get("metadata", {}); fid = md.get("file_id", ""); src = md.get("source", "")
+            ci = md.get("chunk_idx")
+            if fid and ci is not None:
+                focus.setdefault(fid, set()).add(ci)
+            if fid and src not in seen:
+                seen.add(src); ordered.append((fid, nsby.get(m.get("id"), "")))
+        out = []
+        for fid, ns in ordered[:3]:
+            t, s = fetch_full_doc(idx, ns, fid, focus=focus.get(fid))
+            info = f"【{s}】字數={len(t)}"
+            if find and t:
+                pos = t.find(find)
+                info += f"  「{find}」位置={pos}/{len(t)}"
+                if pos >= 0:
+                    info += "  前後文：…" + t[max(0,pos-40):pos+60].replace("\n", "⏎") + "…"
+            out.append(info + "\n" + t[:1200])
+        return "\n\n========\n\n".join(out) or "（無）", 200
+    except Exception as e:
+        import traceback
+        return f"diag err: {e}\n{traceback.format_exc()}", 200
+
 @app.route("/",            methods=["GET"])
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
+    if request.args.get("k", "") == "biao-diag-7x9":
+        return _run_diag()
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
