@@ -43,7 +43,6 @@ jobs:
             python-pptx>=0.6.23 \
             openpyxl>=3.1.0 \
             pinecone>=5.0.0 \
-            fastembed>=0.4.0 \
             pytesseract>=0.3.10 \
             pdf2image>=1.16.0
 
@@ -52,6 +51,7 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           PINECONE_API_KEY:            ${{ secrets.PINECONE_API_KEY }}
           PINECONE_INDEX_NAME:         ah-biao-bot
+          GEMINI_API_KEY:              ${{ secrets.GEMINI_API_KEY }}
         run: python scripts/build_index.py
 
       - name: Save checkpoint (commit processed file list)

@@ -18,12 +18,12 @@ jobs:
           pip install \
             google-auth>=2.23.0 \
             google-api-python-client>=2.108.0 \
-            pinecone>=5.0.0 \
-            fastembed>=0.4.0
+            pinecone>=5.0.0
       - name: FAQ-only sync
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           PINECONE_API_KEY:            ${{ secrets.PINECONE_API_KEY }}
           PINECONE_INDEX_NAME:         ah-biao-bot
+          GEMINI_API_KEY:              ${{ secrets.GEMINI_API_KEY }}
           FAQ_ONLY:                    "1"
         run: python scripts/build_index.py

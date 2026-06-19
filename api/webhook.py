@@ -29,7 +29,7 @@ PINECONE_API_KEY    = os.environ.get("PINECONE_API_KEY", "")
 PINECONE_INDEX_NAME = os.environ.get("PINECONE_INDEX_NAME", "ah-biao-bot")
 SA_JSON             = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 LINE_REPLY_URL      = "https://api.line.me/v2/bot/message/reply"
-EMBED_MODEL_NAME    = "BAAI/bge-small-zh-v1.5"
+EMBED_MODEL_NAME    = "gemini-embedding-001"
 GEN_MODEL           = "gemini-2.5-flash"
 TOP_K               = 8
 TRIGGER             = "阿標"
@@ -77,21 +77,29 @@ def _get_index():
         _pinecone_index = Pinecone(api_key=PINECONE_API_KEY).Index(PINECONE_INDEX_NAME)
     return _pinecone_index
 
-# ── 本地 embedding（fastembed）──────────────────────────────────────────────
-_embed_model = None
-def _get_embed_model():
-    global _embed_model
-    if _embed_model is None:
-        from fastembed import TextEmbedding
-        _embed_model = TextEmbedding(model_name=EMBED_MODEL_NAME, cache_dir="/tmp/fastembed_cache")
-    return _embed_model
+# ── 查詢嵌入：Gemini 付費強模型（gemini-embedding-001，512維，查詢用 taskType）──
+EMBED_DIM = 512
+
+def _l2norm(v):
+    s = sum(x * x for x in v) ** 0.5
+    return [x / s for x in v] if s else v
+
+def _gemini_embed(texts, task):
+    """Gemini 批次嵌入：512維、依用途帶 taskType、回傳正規化向量（與索引一致）。"""
+    reqs = [{"model": "models/gemini-embedding-001",
+             "content": {"parts": [{"text": (t or " ")}]},
+             "outputDimensionality": EMBED_DIM,
+             "taskType": task} for t in texts]
+    resp = _gemini_post("models/gemini-embedding-001:batchEmbedContents",
+                        {"requests": reqs})
+    return [_l2norm(e["values"]) for e in resp["embeddings"]]
 
 def _embed(text):
-    return list(_get_embed_model().query_embed(text))[0].tolist()
+    return _gemini_embed([text], "RETRIEVAL_QUERY")[0]
 
 def _embed_many(texts):
-    """一次批次 embedding 多個查詢，降低延遲。"""
-    return [v.tolist() for v in _get_embed_model().query_embed(texts)]
+    """一次批次嵌入多個查詢（Gemini 強模型，查詢專用 taskType）。"""
+    return _gemini_embed(texts, "RETRIEVAL_QUERY")
 
 # ── Gemini 生成（urllib，多模型備援抗 429/503）──────────────────────────────
 GEN_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
@@ -591,10 +599,42 @@ def webhook():
 
     return "OK", 200
 
+def _run_diag():
+    # 暫時：驗證 Gemini 切換後的回答與檢索（驗完移除）
+    q = request.args.get("q", "")
+    if request.args.get("dump", ""):
+        try:
+            idx = _get_index()
+            all_ns = [""] + [b["namespace"] for b in BUSINESSES if b.get("namespace")]
+            qv = _embed_many([q])
+            best, nsby = {}, {}
+            for ns in all_ns:
+                for m in _multi_query_docs(idx, qv, ns):
+                    mid = m.get("id")
+                    if mid not in best or m.get("score", 0) > best[mid].get("score", 0):
+                        best[mid] = m; nsby[mid] = ns
+            cands = sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)[:10]
+            lines = [f"Q: {q}", "TOP:"]
+            for m in cands:
+                md = m.get("metadata", {})
+                lines.append(f"  {round(m.get('score',0),3)}  {md.get('source','')[:34]}")
+            return "\n".join(lines), 200
+        except Exception as e:
+            import traceback
+            return f"dump err: {e}\n{traceback.format_exc()}", 200
+    try:
+        a, w = answer_for_businesses(BUSINESSES, q)
+        return f"[warns={w}]\n{_strip_md(a)}", 200
+    except Exception as e:
+        import traceback
+        return f"ans err: {e}\n{traceback.format_exc()}", 200
+
 @app.route("/",            methods=["GET"])
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
+    if request.args.get("k", "") == "biao-diag-7x9":
+        return _run_diag()
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
