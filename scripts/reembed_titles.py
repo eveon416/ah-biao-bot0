@@ -1,68 +1,92 @@
 """
-一次性重嵌：把既有「文件片段」改成「檔名＋內容」一起嵌入，
-讓檔名（常是法規/文件全名）成為強檢索訊號，解決法規類問題召回不到的問題。
+一次性重嵌：把索引內「所有」既有向量改用 Gemini 強模型（gemini-embedding-001, 512維）重算。
+用 list()+fetch() 逐頁取回，確保超過 1 萬筆也一個不漏；只重算 values，metadata 不動。
 
-用 query() 直接取回既有向量的 metadata（source/text）重算 embedding，
-不需重新下載 Drive、不需 OCR。只處理 source_type=doc。
-（用 query 而非 list/fetch，相容各版本 pinecone 客戶端。）
+- 文件(doc)：以「檔名＋內容」一起嵌入（檔名是強檢索訊號）
+- FAQ / outline：用既有文字嵌入
+- 全部 RETRIEVAL_DOCUMENT、512維、L2 正規化（與查詢端一致）
 """
 import os
-import traceback
+import json
+import time
+import urllib.request
 from pinecone import Pinecone
-from fastembed import TextEmbedding
 
-KEY  = os.environ["PINECONE_API_KEY"]
-NAME = os.environ.get("PINECONE_INDEX_NAME") or "ah-biao-bot"
-EMBED_MODEL = "BAAI/bge-small-zh-v1.5"
+KEY    = os.environ["PINECONE_API_KEY"]
+NAME   = os.environ.get("PINECONE_INDEX_NAME") or "ah-biao-bot"
+GKEY   = os.environ["GEMINI_API_KEY"]
 EMBED_DIM   = 512
-EMBED_BATCH = 256
 NAMESPACES  = ["", "zongwu", "renshi", "gongwen"]
-SEED = [0.001] * EMBED_DIM
 
 pc  = Pinecone(api_key=KEY)
 idx = pc.Index(NAME)
-_model = TextEmbedding(model_name=EMBED_MODEL)
-def embed(texts):
-    return [e.tolist() for e in _model.embed(texts, batch_size=EMBED_BATCH)]
+
+def _l2(v):
+    s = sum(x * x for x in v) ** 0.5
+    return [x / s for x in v] if s else v
+
+def gemini_embed(texts):
+    reqs = [{"model": "models/gemini-embedding-001",
+             "content": {"parts": [{"text": (t or " ")}]},
+             "outputDimensionality": EMBED_DIM,
+             "taskType": "RETRIEVAL_DOCUMENT"} for t in texts]
+    body = json.dumps({"requests": reqs}).encode()
+    url = ("https://generativelanguage.googleapis.com/v1beta/"
+           f"models/gemini-embedding-001:batchEmbedContents?key={GKEY}")
+    last = ""
+    for _ in range(6):
+        try:
+            req = urllib.request.Request(url, data=body,
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=120) as r:
+                j = json.loads(r.read())
+            return [_l2(e["values"]) for e in j["embeddings"]]
+        except Exception as e:
+            last = str(e)
+            time.sleep(6)
+    raise RuntimeError(f"Gemini 嵌入失敗：{last}")
+
+def text_for(md):
+    txt = md.get("text", "")
+    if md.get("source_type", "doc") == "doc":
+        return f"{md.get('source','')}\n{txt}"     # 文件：檔名＋內容
+    return txt                                      # FAQ / outline：原文
+
+def _meta(v):
+    return (getattr(v, "metadata", None)
+            or (v.get("metadata") if isinstance(v, dict) else {}) or {})
+
+def all_ids(ns):
+    ids = []
+    for page in idx.list(namespace=ns):            # serverless：逐頁回傳 id 清單
+        ids.extend(list(page))
+    return ids
 
 def reembed_ns(ns):
-    try:
-        res = idx.query(vector=SEED, top_k=10000, include_metadata=True,
-                        namespace=ns, filter={"source_type": {"$eq": "doc"}})
-    except Exception as e:
-        print(f"  ns='{ns}' query 失敗：{e}")
-        return 0
-    matches = res.get("matches", []) if isinstance(res, dict) else getattr(res, "matches", [])
-    items = []
-    for m in matches:
-        mid = m.get("id") if hasattr(m, "get") else m["id"]
-        md  = (m.get("metadata") if hasattr(m, "get") else m["metadata"]) or {}
-        src = md.get("source", "")
-        txt = md.get("text", "")
-        if txt:
-            items.append((mid, dict(md), f"{src}\n{txt}"))
-    print(f"  ns='{ns}'：文件片段 {len(items)}（共回 {len(matches)} 筆）")
+    ids = all_ids(ns)
+    print(f"  ns='{ns}'：共 {len(ids)} 個向量", flush=True)
     done = 0
-    for i in range(0, len(items), EMBED_BATCH):
-        bi = items[i:i+EMBED_BATCH]
-        embs = embed([t for _, _, t in bi])
+    for i in range(0, len(ids), 100):
+        batch = ids[i:i+100]
+        fr = idx.fetch(ids=batch, namespace=ns)
+        vecs = getattr(fr, "vectors", None) or fr.get("vectors", {})
+        items = [(vid, _meta(v)) for vid, v in vecs.items()]
+        if not items:
+            continue
+        embs = gemini_embed([text_for(md) for _, md in items])
         ups = [{"id": vid, "values": e, "metadata": md}
-               for (vid, md, _), e in zip(bi, embs)]
-        for j in range(0, len(ups), 100):
-            idx.upsert(vectors=ups[j:j+100], namespace=ns)
+               for (vid, md), e in zip(items, embs)]
+        idx.upsert(vectors=ups, namespace=ns)
         done += len(ups)
-        print(f"    重嵌 {done}/{len(items)}")
+        print(f"    {done}/{len(ids)}", flush=True)
     return done
 
 def main():
     total = 0
     for ns in NAMESPACES:
-        print(f"=== namespace='{ns}' ===")
-        try:
-            total += reembed_ns(ns)
-        except Exception:
-            print(traceback.format_exc())
-    print(f"\n🎉 完成！重嵌文件片段：{total}")
+        print(f"=== namespace='{ns}' ===", flush=True)
+        total += reembed_ns(ns)
+    print(f"\n🎉 Gemini 重嵌完成：{total} 個向量", flush=True)
 
 if __name__ == "__main__":
     main()

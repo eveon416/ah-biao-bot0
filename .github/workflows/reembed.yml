@@ -24,13 +24,11 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: |
-          pip install \
-            pinecone>=5.0.0 \
-            fastembed>=0.4.0
+        run: pip install "pinecone>=5.0.0"
 
       - name: Re-embed
         env:
           PINECONE_API_KEY:    ${{ secrets.PINECONE_API_KEY }}
           PINECONE_INDEX_NAME: ${{ secrets.PINECONE_INDEX_NAME }}
+          GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
         run: python scripts/reembed_titles.py

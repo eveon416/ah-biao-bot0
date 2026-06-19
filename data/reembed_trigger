@@ -1,1 +1,1 @@
-reembed 2026-06-19b 改用 query() 列舉向量重嵌（相容各版本 pinecone）
+reembed 2026-06-19 Gemini 強模型重嵌（list+fetch 全量、512維、taskType）
