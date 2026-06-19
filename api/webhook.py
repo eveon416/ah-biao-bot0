@@ -586,6 +586,30 @@ def webhook():
 def _run_diag():
     idx = _get_index()
     all_ns = [""] + [b["namespace"] for b in BUSINESSES if b.get("namespace")]
+    dname = request.args.get("drive", "")
+    if dname:   # 直接查 Drive：這個檔在不在雲端硬碟、在哪個資料夾
+        from google.oauth2 import service_account
+        import google.auth.transport.requests
+        info = json.loads(SA_JSON)
+        creds = service_account.Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/drive.readonly"])
+        creds.refresh(google.auth.transport.requests.Request())
+        tok = creds.token
+        q = urllib.parse.quote(f"name contains '{dname}' and trashed=false")
+        url = ("https://www.googleapis.com/drive/v3/files?q=" + q +
+               "&fields=files(id,name,mimeType,size,parents)&pageSize=50"
+               "&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=allDrives")
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            j = json.loads(r.read())
+        SCAN = "18-aKWluYmR2-A59ATtWb90wFnimpo_Cu"
+        lines = []
+        for f in j.get("files", []):
+            mb = int(f.get("size", 0)) / 1048576
+            par = (f.get("parents") or [""])[0]
+            inscan = "✓在採購掃描夾" if par == SCAN else f"✗父夾={par[:12]}"
+            lines.append(f"{f['name'][:40]}  {mb:.1f}MB  {f['mimeType'].split('.')[-1][:18]}  {inscan}")
+        return ("Drive 搜尋結果：\n" + ("\n".join(lines) or "（雲端找不到此檔）")), 200
     name = request.args.get("find", "")
     if name:   # 在各 namespace 找檔名含 name 的文件，回報所在 namespace 與片段數
         rep = {}
