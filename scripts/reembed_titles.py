@@ -1,14 +1,13 @@
 """
-一次性重嵌：把索引內「所有」既有向量改用 Gemini 強模型（gemini-embedding-001, 512維）重算。
-用 list()+fetch() 逐頁取回，確保超過 1 萬筆也一個不漏；只重算 values，metadata 不動。
-
-- 文件(doc)：以「檔名＋內容」一起嵌入（檔名是強檢索訊號）
-- FAQ / outline：用既有文字嵌入
-- 全部 RETRIEVAL_DOCUMENT、512維、L2 正規化（與查詢端一致）
+一次性重嵌：把索引內既有向量改用 Gemini 強模型（gemini-embedding-001, 512維）重算。
+列舉手法：用多個「不同方向」的種子向量各撈 top_k=10000 再聯集去重，
+即使單一 namespace 超過一萬筆也能近乎全數涵蓋（避開 list() 在此版本回傳空的問題）。
+只重算 values，metadata 不動。
 """
 import os
 import json
 import time
+import math
 import urllib.request
 from pinecone import Pinecone
 
@@ -17,6 +16,16 @@ NAME   = os.environ.get("PINECONE_INDEX_NAME") or "ah-biao-bot"
 GKEY   = os.environ["GEMINI_API_KEY"]
 EMBED_DIM   = 512
 NAMESPACES  = ["", "zongwu", "renshi", "gongwen"]
+
+# 多個方向相異的種子向量 → 各自 top_k 涵蓋不同子集，聯集後近乎全覆蓋
+SEEDS = [
+    [0.001] * EMBED_DIM,
+    [((-1) ** i) * 0.05 for i in range(EMBED_DIM)],
+    [math.sin(i) * 0.05 for i in range(EMBED_DIM)],
+    [math.cos(i * 1.7) * 0.05 for i in range(EMBED_DIM)],
+    [((i % 11) - 5) * 0.02 for i in range(EMBED_DIM)],
+    [math.sin(i * 0.3 + 1) * 0.05 for i in range(EMBED_DIM)],
+]
 
 pc  = Pinecone(api_key=KEY)
 idx = pc.Index(NAME)
@@ -52,33 +61,32 @@ def text_for(md):
         return f"{md.get('source','')}\n{txt}"     # 文件：檔名＋內容
     return txt                                      # FAQ / outline：原文
 
-def _meta(v):
-    return (getattr(v, "metadata", None)
-            or (v.get("metadata") if isinstance(v, dict) else {}) or {})
-
-def all_ids(ns):
-    ids = []
-    for page in idx.list(namespace=ns):            # serverless：逐頁回傳 id 清單
-        ids.extend(list(page))
-    return ids
+def collect(ns):
+    """多種子聯集，回傳 {id: metadata}。"""
+    found = {}
+    for s in SEEDS:
+        res = idx.query(vector=s, top_k=10000, include_metadata=True, namespace=ns)
+        ms = res.get("matches", []) if isinstance(res, dict) else getattr(res, "matches", [])
+        for m in ms:
+            mid = m.get("id") if hasattr(m, "get") else m["id"]
+            md  = (m.get("metadata") if hasattr(m, "get") else m["metadata"]) or {}
+            found[mid] = md
+        print(f"    種子撈取後累計唯一向量：{len(found)}", flush=True)
+    return found
 
 def reembed_ns(ns):
-    ids = all_ids(ns)
-    print(f"  ns='{ns}'：共 {len(ids)} 個向量", flush=True)
+    found = collect(ns)
+    items = list(found.items())
+    print(f"  ns='{ns}'：唯一向量 {len(items)}", flush=True)
     done = 0
-    for i in range(0, len(ids), 100):
-        batch = ids[i:i+100]
-        fr = idx.fetch(ids=batch, namespace=ns)
-        vecs = getattr(fr, "vectors", None) or fr.get("vectors", {})
-        items = [(vid, _meta(v)) for vid, v in vecs.items()]
-        if not items:
-            continue
-        embs = gemini_embed([text_for(md) for _, md in items])
+    for i in range(0, len(items), 100):
+        batch = items[i:i+100]
+        embs = gemini_embed([text_for(md) for _, md in batch])
         ups = [{"id": vid, "values": e, "metadata": md}
-               for (vid, md), e in zip(items, embs)]
+               for (vid, md), e in zip(batch, embs)]
         idx.upsert(vectors=ups, namespace=ns)
         done += len(ups)
-        print(f"    {done}/{len(ids)}", flush=True)
+        print(f"    重嵌 {done}/{len(items)}", flush=True)
     return done
 
 def main():
