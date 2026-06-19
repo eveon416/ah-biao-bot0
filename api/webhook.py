@@ -684,11 +684,19 @@ def _run_diag():
             mid = m.get("id")
             if mid not in best or m.get("score", 0) > best[mid].get("score", 0):
                 best[mid] = m; nsby[mid] = ns
-    cands = sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)[:14]
+    allc = sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)
+    tfid = request.args.get("fid", "")
     lines = [f"Q: {q}", "變體: " + " | ".join(queries), f"MATCH={rel}", "TOP:"]
-    for m in cands:
+    for m in allc[:14]:
         md = m.get("metadata", {})
         lines.append(f"  {round(m.get('score',0),3)}  ns='{nsby.get(m.get('id'),'')}'  {md.get('source','')[:34]}  ci={md.get('chunk_idx')}")
+    if tfid:
+        hits = [(i, m) for i, m in enumerate(allc) if m.get("metadata", {}).get("file_id") == tfid]
+        if hits:
+            i0, m0 = hits[0]
+            lines.append(f"\n目標檔最佳排名: 第{i0+1}名  最高分={round(m0.get('score',0),3)}  命中片段數={len(hits)}")
+        else:
+            lines.append("\n目標檔：未進入候選（分數太低，<0.3 被濾掉或未被任何變體召回）")
     return "\n".join(lines), 200
 
 @app.route("/",            methods=["GET"])
