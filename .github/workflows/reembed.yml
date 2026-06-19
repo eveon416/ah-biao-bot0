@@ -1,0 +1,36 @@
+name: Re-embed With Titles
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'data/reembed_trigger'   # 改動此檔即觸發一次性重嵌
+
+concurrency:
+  group: kb-sync          # 與每日同步共用，避免同時寫入互搶
+  cancel-in-progress: false
+
+jobs:
+  reembed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install \
+            pinecone>=5.0.0 \
+            fastembed>=0.4.0
+
+      - name: Re-embed
+        env:
+          PINECONE_API_KEY:    ${{ secrets.PINECONE_API_KEY }}
+          PINECONE_INDEX_NAME: ${{ secrets.PINECONE_INDEX_NAME }}
+        run: python scripts/reembed_titles.py

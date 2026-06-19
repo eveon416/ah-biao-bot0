@@ -476,7 +476,8 @@ def index_drive(index, business, drive, done):
         if chunks:
             for j in range(0, len(chunks), EMBED_BATCH):
                 bc = chunks[j:j+EMBED_BATCH]
-                upsert(index, ns, bc, embed([c["text"] for c in bc]), "doc")
+                # 把檔名一起嵌入（檔名常是法規/文件全名，是強檢索訊號）；儲存的 text 維持乾淨
+                upsert(index, ns, bc, embed([f"{c['source']}\n{c['text']}" for c in bc]), "doc")
             total += len(chunks)
             print(f"  [{i}/{len(files)}] {f['name']} → {len(chunks)} 片段")
         else:                                  # 抽不到任何文字 → 列入問題清單
