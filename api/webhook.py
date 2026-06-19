@@ -598,18 +598,24 @@ def _run_diag():
         tok = creds.token
     if folder:   # 沿父鏈往上走，看是否在採購掃描夾(18-aKW...)底下
         SCAN = "18-aKWluYmR2-A59ATtWb90wFnimpo_Cu"
-        chain, cur = [], folder
-        for _ in range(12):
-            u = (f"https://www.googleapis.com/drive/v3/files/{cur}"
-                 "?fields=id,name,parents&supportsAllDrives=true")
-            with urllib.request.urlopen(urllib.request.Request(u, headers={"Authorization": f"Bearer {tok}"}), timeout=20) as r:
-                f = json.loads(r.read())
-            chain.append(f.get("name", "?") + ("  ★採購掃描根" if f.get("id") == SCAN else ""))
+        chain, cur, inscan = [], folder, False
+        for _ in range(15):
+            try:
+                u = (f"https://www.googleapis.com/drive/v3/files/{cur}"
+                     "?fields=id,name,parents&supportsAllDrives=true")
+                with urllib.request.urlopen(urllib.request.Request(u, headers={"Authorization": f"Bearer {tok}"}), timeout=20) as r:
+                    f = json.loads(r.read())
+            except Exception as e:
+                chain.append(f"[{cur[:14]} 讀取失敗:{e}]")
+                break
+            mark = "  ★採購掃描根" if f.get("id") == SCAN else ""
+            if f.get("id") == SCAN:
+                inscan = True
+            chain.append(f"{f.get('name','?')}  (id={f.get('id','')[:14]}){mark}")
             ps = f.get("parents") or []
             if f.get("id") == SCAN or not ps:
                 break
             cur = ps[0]
-        inscan = any("★採購掃描根" in c for c in chain)
         return ("資料夾鏈（子→父）：\n" + "\n".join(f"  {c}" for c in chain) +
                 f"\n\n在採購掃描夾底下？ {'是 ✓' if inscan else '否 ✗（不會被掃描索引）'}"), 200
     if dname:   # 直接查 Drive：這個檔在不在雲端硬碟、在哪個資料夾
