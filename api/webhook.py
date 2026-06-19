@@ -587,7 +587,8 @@ def _run_diag():
     idx = _get_index()
     all_ns = [""] + [b["namespace"] for b in BUSINESSES if b.get("namespace")]
     dname = request.args.get("drive", "")
-    if dname:   # 直接查 Drive：這個檔在不在雲端硬碟、在哪個資料夾
+    folder = request.args.get("folder", "")
+    if dname or folder:
         from google.oauth2 import service_account
         import google.auth.transport.requests
         info = json.loads(SA_JSON)
@@ -595,6 +596,23 @@ def _run_diag():
             info, scopes=["https://www.googleapis.com/auth/drive.readonly"])
         creds.refresh(google.auth.transport.requests.Request())
         tok = creds.token
+    if folder:   # 沿父鏈往上走，看是否在採購掃描夾(18-aKW...)底下
+        SCAN = "18-aKWluYmR2-A59ATtWb90wFnimpo_Cu"
+        chain, cur = [], folder
+        for _ in range(12):
+            u = (f"https://www.googleapis.com/drive/v3/files/{cur}"
+                 "?fields=id,name,parents&supportsAllDrives=true")
+            with urllib.request.urlopen(urllib.request.Request(u, headers={"Authorization": f"Bearer {tok}"}), timeout=20) as r:
+                f = json.loads(r.read())
+            chain.append(f.get("name", "?") + ("  ★採購掃描根" if f.get("id") == SCAN else ""))
+            ps = f.get("parents") or []
+            if f.get("id") == SCAN or not ps:
+                break
+            cur = ps[0]
+        inscan = any("★採購掃描根" in c for c in chain)
+        return ("資料夾鏈（子→父）：\n" + "\n".join(f"  {c}" for c in chain) +
+                f"\n\n在採購掃描夾底下？ {'是 ✓' if inscan else '否 ✗（不會被掃描索引）'}"), 200
+    if dname:   # 直接查 Drive：這個檔在不在雲端硬碟、在哪個資料夾
         q = urllib.parse.quote(f"name contains '{dname}' and trashed=false")
         url = ("https://www.googleapis.com/drive/v3/files?q=" + q +
                "&fields=files(id,name,mimeType,size,parents)&pageSize=50"
