@@ -603,42 +603,10 @@ def webhook():
 
     return "OK", 200
 
-def _run_diag():
-    # 暫時：驗證 Gemini 切換後的回答與檢索（驗完移除）
-    q = request.args.get("q", "")
-    if request.args.get("dump", ""):
-        try:
-            idx = _get_index()
-            all_ns = [""] + [b["namespace"] for b in BUSINESSES if b.get("namespace")]
-            qv = _embed_many([q])
-            best, nsby = {}, {}
-            for ns in all_ns:
-                for m in _multi_query_docs(idx, qv, ns):
-                    mid = m.get("id")
-                    if mid not in best or m.get("score", 0) > best[mid].get("score", 0):
-                        best[mid] = m; nsby[mid] = ns
-            cands = sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)[:10]
-            lines = [f"Q: {q}", "TOP:"]
-            for m in cands:
-                md = m.get("metadata", {})
-                lines.append(f"  {round(m.get('score',0),3)}  {md.get('source','')[:34]}")
-            return "\n".join(lines), 200
-        except Exception as e:
-            import traceback
-            return f"dump err: {e}\n{traceback.format_exc()}", 200
-    try:
-        a, w = answer_for_businesses(BUSINESSES, q)
-        return f"[warns={w}]\n{_strip_md(a)}", 200
-    except Exception as e:
-        import traceback
-        return f"ans err: {e}\n{traceback.format_exc()}", 200
-
 @app.route("/",            methods=["GET"])
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
-    if request.args.get("k", "") == "biao-diag-7x9":
-        return _run_diag()
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
