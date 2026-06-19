@@ -586,6 +586,16 @@ def webhook():
 def _run_diag():
     idx = _get_index()
     all_ns = [""] + [b["namespace"] for b in BUSINESSES if b.get("namespace")]
+    countfid = request.args.get("countfid", "")
+    if countfid:   # 確定某 file_id 在各 namespace 索引了幾個片段
+        out = []
+        for ns in all_ns:
+            res = idx.query(vector=[0.001]*512, top_k=1000, include_metadata=True,
+                            namespace=ns, filter={"file_id": {"$eq": countfid}})
+            ms = res.get("matches", [])
+            if ms:
+                out.append(f"ns='{ns}'  片段={len(ms)}  source={ms[0].get('metadata',{}).get('source','')}")
+        return ("索引中此 file_id：\n" + ("\n".join(out) or "（完全沒有，未索引）")), 200
     dname = request.args.get("drive", "")
     folder = request.args.get("folder", "")
     if dname or folder:
@@ -647,7 +657,7 @@ def _run_diag():
             mb = int(f.get("size", 0)) / 1048576
             par = (f.get("parents") or [""])[0]
             inscan = "✓在採購掃描夾" if par == SCAN else f"✗父夾={par[:12]}"
-            lines.append(f"id={f['id'][:14]}  {f['name'][:36]}  {mb:.1f}MB  {f['mimeType'].split('.')[-1][:16]}  {inscan}")
+            lines.append(f"id={f['id']}  {f['name'][:36]}  {mb:.1f}MB  {inscan}")
         return ("Drive 搜尋結果：\n" + ("\n".join(lines) or "（雲端找不到此檔）")), 200
     name = request.args.get("find", "")
     if name:   # 在各 namespace 找檔名含 name 的文件，回報所在 namespace 與片段數
