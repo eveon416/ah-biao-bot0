@@ -583,10 +583,47 @@ def webhook():
 
     return "OK", 200
 
+def _run_diag():
+    idx = _get_index()
+    all_ns = [""] + [b["namespace"] for b in BUSINESSES if b.get("namespace")]
+    name = request.args.get("find", "")
+    if name:   # 在各 namespace 找檔名含 name 的文件，回報所在 namespace 與片段數
+        rep = {}
+        for ns in all_ns:
+            res = idx.query(vector=[0.001]*512, top_k=2000, include_metadata=True,
+                            namespace=ns, filter={"source_type": {"$eq": "doc"}})
+            for m in res.get("matches", []):
+                s = m.get("metadata", {}).get("source", "")
+                if name in s:
+                    rep[(ns, s)] = rep.get((ns, s), 0) + 1
+        if not rep:
+            return f"（索引中找不到檔名含「{name}」的文件）", 200
+        return "\n".join(f"ns='{ns}'  片段={n}  {s}" for (ns, s), n in sorted(rep.items())), 200
+    q = request.args.get("q", "")
+    faqs = []
+    for b in BUSINESSES:
+        faqs.extend(get_all_faq(b))
+    rel, fi, queries = match_and_rewrite(q, faqs[:FAQ_MATCH_MAX])
+    qv = _embed_many(queries)
+    best, nsby = {}, {}
+    for ns in all_ns:
+        for m in _multi_query_docs(idx, qv, ns):
+            mid = m.get("id")
+            if mid not in best or m.get("score", 0) > best[mid].get("score", 0):
+                best[mid] = m; nsby[mid] = ns
+    cands = sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)[:14]
+    lines = [f"Q: {q}", "變體: " + " | ".join(queries), f"MATCH={rel}", "TOP:"]
+    for m in cands:
+        md = m.get("metadata", {})
+        lines.append(f"  {round(m.get('score',0),3)}  ns='{nsby.get(m.get('id'),'')}'  {md.get('source','')[:34]}  ci={md.get('chunk_idx')}")
+    return "\n".join(lines), 200
+
 @app.route("/",            methods=["GET"])
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
+    if request.args.get("k", "") == "biao-diag-7x9":
+        return _run_diag()
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
