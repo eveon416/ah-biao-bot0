@@ -618,6 +618,21 @@ def _run_diag():
             cur = ps[0]
         return ("資料夾鏈（子→父）：\n" + "\n".join(f"  {c}" for c in chain) +
                 f"\n\n在採購掃描夾底下？ {'是 ✓' if inscan else '否 ✗（不會被掃描索引）'}"), 200
+    children = request.args.get("children", "")
+    if children:   # 列出某資料夾的直接子項（看裡面到底是真檔還是捷徑）
+        q = urllib.parse.quote(f"'{children}' in parents and trashed=false")
+        url = ("https://www.googleapis.com/drive/v3/files?q=" + q +
+               "&fields=files(id,name,mimeType,size,shortcutDetails)&pageSize=200"
+               "&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=allDrives")
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"}), timeout=20) as r:
+            j = json.loads(r.read())
+        lines = []
+        for f in j.get("files", []):
+            mime = f.get("mimeType", "").split(".")[-1]
+            tgt = (f.get("shortcutDetails") or {}).get("targetId", "")
+            extra = f"  →捷徑指向 {tgt[:14]}" if tgt else ""
+            lines.append(f"{f['name'][:42]}  [{mime}]{extra}")
+        return (f"資料夾 {children[:14]} 子項（{len(lines)}）：\n" + ("\n".join(lines) or "（空）")), 200
     if dname:   # 直接查 Drive：這個檔在不在雲端硬碟、在哪個資料夾
         q = urllib.parse.quote(f"name contains '{dname}' and trashed=false")
         url = ("https://www.googleapis.com/drive/v3/files?q=" + q +
@@ -632,7 +647,7 @@ def _run_diag():
             mb = int(f.get("size", 0)) / 1048576
             par = (f.get("parents") or [""])[0]
             inscan = "✓在採購掃描夾" if par == SCAN else f"✗父夾={par[:12]}"
-            lines.append(f"{f['name'][:40]}  {mb:.1f}MB  {f['mimeType'].split('.')[-1][:18]}  {inscan}")
+            lines.append(f"id={f['id'][:14]}  {f['name'][:36]}  {mb:.1f}MB  {f['mimeType'].split('.')[-1][:16]}  {inscan}")
         return ("Drive 搜尋結果：\n" + ("\n".join(lines) or "（雲端找不到此檔）")), 200
     name = request.args.get("find", "")
     if name:   # 在各 namespace 找檔名含 name 的文件，回報所在 namespace 與片段數
