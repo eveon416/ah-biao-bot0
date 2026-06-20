@@ -607,6 +607,13 @@ def _run_diag():
     # 暫時：檢視實際餵給 LLM 的文件內容 / 找特定關鍵字 / 列出 .txt 檔 id（驗完移除）
     q = request.args.get("q", "")
     find = request.args.get("find", "")     # 在還原文中找這個關鍵字並回報位置
+    if request.args.get("ans", ""):         # 跑完整回答流程
+        try:
+            a, w = answer_for_businesses(BUSINESSES, q)
+            return f"[warns={w}]\n{_strip_md(a)}", 200
+        except Exception as e:
+            import traceback
+            return f"ans err: {e}\n{traceback.format_exc()}", 200
     if request.args.get("txtids", ""):      # 列出所有 text/plain 檔 id（供清 checkpoint 重建）
         try:
             from google.oauth2 import service_account
