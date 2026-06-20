@@ -12,6 +12,8 @@ jobs:
   law-check:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      issues: write          # 有更新時開 Issue → GitHub 寄信通知
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,4 +29,6 @@ jobs:
           MAIL_USER:                   ${{ secrets.MAIL_USER }}
           MAIL_PASS:                   ${{ secrets.MAIL_PASS }}
           MAIL_TO:                     ${{ secrets.MAIL_TO }}
+          GH_TOKEN:                    ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO:                     ${{ github.repository }}
         run: python scripts/law_check.py

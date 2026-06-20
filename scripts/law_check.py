@@ -106,6 +106,26 @@ MAIL_USER = os.environ.get("MAIL_USER", "")     # 寄件 Gmail
 MAIL_PASS = os.environ.get("MAIL_PASS", "")     # Gmail 應用程式密碼
 MAIL_TO   = os.environ.get("MAIL_TO", "h94504709@gmail.com")
 
+def notify_github_issue(updated_list):
+    """有更新時開一張 GitHub Issue → GitHub 會寄信通知你（信裡含法規清單），零外部設定。"""
+    token = os.environ.get("GH_TOKEN", "")
+    repo  = os.environ.get("GH_REPO", "")
+    if not (token and repo and updated_list):
+        return
+    body = ["阿標偵測到下列法規有新版本，建議您更新 Drive 內對應的 .txt：", ""]
+    for name, od, ld, url in updated_list:
+        body.append(f"- **{name}**　你的版本 {od} → 最新 {ld}　{url}")
+    body.append("")
+    body.append(f"共 {len(updated_list)} 部。完整清單見試算表「{TAB}」分頁。")
+    ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+    data = json.dumps({"title": f"【法規更新】{len(updated_list)} 部法規有新版本（{ts}）",
+                       "body": "\n".join(body)}).encode()
+    req = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues", data=data, method="POST",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+                     "User-Agent": "ah-biao-law-check", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        print(f"已開 Issue 通知（GitHub 會寄信）：#{json.loads(r.read()).get('number')}")
+
 def send_mail(updated_list):
     if not (MAIL_USER and MAIL_PASS and updated_list):
         if updated_list and not (MAIL_USER and MAIL_PASS):
@@ -169,7 +189,8 @@ def _main():
     rows.append([f"（更新時間 {ts}；共 {len(ours)} 部法規，其中 {len(updated_list)} 部有更新）", "", "", "", "", ""])
     write_sheet(rows)
     print(f"完成：我方 {len(ours)} 部法規，{len(updated_list)} 部有更新 → 已寫入「{TAB}」分頁")
-    send_mail(updated_list)   # 有更新才寄信
+    notify_github_issue(updated_list)   # 有更新→開 Issue（GitHub 寄信，零設定）
+    send_mail(updated_list)             # 若另設了 Gmail App Password，也寄一封正式信
 
 if __name__ == "__main__":
     main()
