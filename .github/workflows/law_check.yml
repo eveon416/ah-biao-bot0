@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install deps
-        run: pip install "pinecone>=5.0.0" "google-auth>=2.23.0"
+        run: pip install "pinecone>=5.0.0" "google-auth>=2.23.0" "requests>=2.31.0"
       - name: Check law updates
         env:
           PINECONE_API_KEY:            ${{ secrets.PINECONE_API_KEY }}
