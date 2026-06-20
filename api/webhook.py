@@ -603,45 +603,10 @@ def webhook():
 
     return "OK", 200
 
-def _run_diag():
-    fid = request.args.get("folder", "")
-    try:
-        from google.oauth2 import service_account
-        import google.auth.transport.requests
-        info = json.loads(SA_JSON)
-        creds = service_account.Credentials.from_service_account_info(
-            info, scopes=["https://www.googleapis.com/auth/drive.readonly"])
-        creds.refresh(google.auth.transport.requests.Request())
-        tok = creds.token
-        out = ["服務帳號：" + info.get("client_email", "?")]
-        # 1) 資料夾本身能不能讀
-        try:
-            u = f"https://www.googleapis.com/drive/v3/files/{fid}?fields=id,name,owners(emailAddress)&supportsAllDrives=true"
-            with urllib.request.urlopen(urllib.request.Request(u, headers={"Authorization": f"Bearer {tok}"}), timeout=20) as r:
-                meta = json.loads(r.read())
-            out.append(f"資料夾可讀：✓ 名稱「{meta.get('name')}」")
-        except Exception as e:
-            out.append(f"資料夾讀取失敗：{e}（多半=沒分享給服務帳號）")
-        # 2) 列子項
-        q = urllib.parse.quote(f"'{fid}' in parents and trashed=false")
-        u = ("https://www.googleapis.com/drive/v3/files?q=" + q +
-             "&fields=files(name,mimeType)&pageSize=50&supportsAllDrives=true&includeItemsFromAllDrives=true")
-        with urllib.request.urlopen(urllib.request.Request(u, headers={"Authorization": f"Bearer {tok}"}), timeout=20) as r:
-            files = json.loads(r.read()).get("files", [])
-        out.append(f"子項數：{len(files)}")
-        for f in files[:30]:
-            out.append("  " + ("[夾] " if "folder" in f["mimeType"] else "") + f["name"])
-        return "\n".join(out), 200
-    except Exception as e:
-        import traceback
-        return f"err: {e}\n{traceback.format_exc()}", 200
-
 @app.route("/",            methods=["GET"])
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
-    if request.args.get("k", "") == "biao-diag-7x9":
-        return _run_diag()
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
