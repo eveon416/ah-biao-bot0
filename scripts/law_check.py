@@ -105,6 +105,19 @@ def _fmt(n):
     return "" if not n else f"{n//10000}-{n//100%100:02d}-{n%100:02d}"
 
 def main():
+    try:
+        _main()
+    except Exception:
+        import traceback
+        tb = traceback.format_exc()
+        print(tb)
+        try:
+            write_sheet([["法規檢查發生錯誤（請回報）", tb[:4000]]])
+        except Exception:
+            pass
+        raise
+
+def _main():
     ours = our_laws()
     latest = official_latest()
     header = ["法規名稱", "我方版本(修正日期)", "線上最新版本", "狀態", "官方連結", "我方檔名"]
