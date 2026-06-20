@@ -112,14 +112,16 @@ def notify_github_issue(updated_list):
     repo  = os.environ.get("GH_REPO", "")
     if not (token and repo and updated_list):
         return
-    body = ["阿標偵測到下列法規有新版本，建議您更新 Drive 內對應的 .txt：", ""]
+    owner = repo.split("/")[0]   # @ 並指派給 repo 擁有者 → 預設設定也會寄信
+    body = [f"@{owner} 阿標偵測到下列法規有新版本，建議您更新 Drive 內對應的 .txt：", ""]
     for name, od, ld, url in updated_list:
         body.append(f"- **{name}**　你的版本 {od} → 最新 {ld}　{url}")
     body.append("")
     body.append(f"共 {len(updated_list)} 部。完整清單見試算表「{TAB}」分頁。")
     ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
     data = json.dumps({"title": f"【法規更新】{len(updated_list)} 部法規有新版本（{ts}）",
-                       "body": "\n".join(body)}).encode()
+                       "body": "\n".join(body),
+                       "assignees": [owner]}).encode()
     req = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues", data=data, method="POST",
             headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                      "User-Agent": "ah-biao-law-check", "Content-Type": "application/json"})
