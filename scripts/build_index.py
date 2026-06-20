@@ -321,6 +321,22 @@ XLSX_MIMES = {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
               "application/vnd.ms-excel"}
 PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
+def _decode_text(raw):
+    """自動偵測純文字編碼：台灣公務 .txt 常是 Big5(CP950)，硬用 UTF-8 會整份亂碼。
+    逐一試解，挑「中文字最多、亂碼/控制字最少」的結果。"""
+    best, best_score = None, -1
+    for enc in ("utf-8-sig", "utf-8", "cp950", "big5hkscs", "gb18030", "utf-16"):
+        try:
+            s = raw.decode(enc)
+        except Exception:
+            continue
+        cjk = sum(1 for c in s if "一" <= c <= "鿿")
+        bad = sum(1 for c in s if c == "�" or (ord(c) < 32 and c not in "\r\n\t"))
+        score = cjk - bad * 5
+        if score > best_score:
+            best_score, best = score, s
+    return best if best is not None else raw.decode("utf-8", "ignore")
+
 def extract_text(service, f):
     mime, fid, name = f["mimeType"], f["id"], f["name"]
     sz = f.get("size", 0)   # 二進位檔的大小，用來驗證下載完整性
@@ -346,7 +362,7 @@ def extract_text(service, f):
         if mime in XLSX_MIMES:
             return _xlsx_text(_download(service, fid, expected_size=sz), name)
         if mime.startswith("text/"):
-            return _download(service, fid, expected_size=sz).decode("utf-8", "ignore")
+            return _decode_text(_download(service, fid, expected_size=sz))
     except Exception as e:
         print(f"  ⚠ 讀取失敗（暫時性，將重試）{name}: {e}")
         return None          # 例外＝暫時性錯誤 → 回 None 讓上層重試

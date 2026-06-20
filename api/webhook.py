@@ -604,9 +604,36 @@ def webhook():
     return "OK", 200
 
 def _run_diag():
-    # 暫時：檢視實際餵給 LLM 的文件內容 / 找特定關鍵字在還原文中的位置（驗完移除）
+    # 暫時：檢視實際餵給 LLM 的文件內容 / 找特定關鍵字 / 列出 .txt 檔 id（驗完移除）
     q = request.args.get("q", "")
     find = request.args.get("find", "")     # 在還原文中找這個關鍵字並回報位置
+    if request.args.get("txtids", ""):      # 列出所有 text/plain 檔 id（供清 checkpoint 重建）
+        try:
+            from google.oauth2 import service_account
+            import google.auth.transport.requests
+            info = json.loads(SA_JSON)
+            creds = service_account.Credentials.from_service_account_info(
+                info, scopes=["https://www.googleapis.com/auth/drive.readonly"])
+            creds.refresh(google.auth.transport.requests.Request())
+            tok = creds.token
+            ids, page = [], ""
+            while True:
+                qq = urllib.parse.quote("mimeType='text/plain' and trashed=false")
+                url = ("https://www.googleapis.com/drive/v3/files?q=" + qq +
+                       "&fields=nextPageToken,files(id)&pageSize=1000"
+                       "&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=allDrives")
+                if page:
+                    url += "&pageToken=" + page
+                with urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"}), timeout=30) as r:
+                    j = json.loads(r.read())
+                ids += [f["id"] for f in j.get("files", [])]
+                page = j.get("nextPageToken", "")
+                if not page:
+                    break
+            return json.dumps(ids), 200
+        except Exception as e:
+            import traceback
+            return f"txtids err: {e}\n{traceback.format_exc()}", 200
     try:
         idx = _get_index()
         all_ns = [""] + [b["namespace"] for b in BUSINESSES if b.get("namespace")]
