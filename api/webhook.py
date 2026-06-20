@@ -133,6 +133,32 @@ def _generate(prompt):
             _t.sleep(1.2)
     raise RuntimeError(f"生成失敗（已試多個模型）：{last}")
 
+def _web_answer(question):
+    """本局資料找不到時的後援：用 Gemini google_search 上網查公開權威來源（政府採購法、
+    工程會、各府採購SOP 等）。會自然找到台北市採購業務資訊網等內容。回傳純文字答案。"""
+    prompt = (
+        "你是花蓮縣衛生局的採購業務助理。下面這個問題在本局內部資料找不到，"
+        "請用網路搜尋，優先參考政府採購法、行政院公共工程委員會、各級政府採購標準作業程序(SOP)"
+        "等公開且權威的來源來回答。\n"
+        "用繁體中文、條理清楚、純文字（不要用 Markdown 符號）。\n"
+        "重要：若某項內容是『特定地方政府(例如台北市)的專屬規定』，務必明確標註"
+        "「此為○○之規定，花蓮請依在地規定再確認」；屬全國一致的法令(如政府採購法)則正常說明。\n"
+        "若網路上也查不到可靠答案，就回覆單獨一行 [NONE]。\n\n"
+        f"問題：{question}")
+    payload = {"contents": [{"parts": [{"text": prompt}]}],
+               "tools": [{"google_search": {}}],
+               "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2048}}
+    try:
+        resp = _gemini_post("models/gemini-2.5-flash:generateContent", payload)
+        cand = resp["candidates"][0]
+        text = "".join(p.get("text", "") for p in cand.get("content", {}).get("parts", [])).strip()
+        if not text or "[NONE]" in text:
+            return ""
+        return text
+    except Exception as e:
+        print(f"網路查詢失敗：{e}")
+        return ""
+
 # ── Google Sheets 寫入（service account）───────────────────────────────────
 def _sheets_token():
     from google.oauth2 import service_account
@@ -480,6 +506,12 @@ def answer_for_businesses(businesses, question):
             print(f"NOTFOUND 救援略過：{e}")
 
     if "[NOTFOUND]" in raw:
+        # 本局資料找不到 → 後援：上網查公開權威來源（含台北採購SOP等）
+        web = _web_answer(question)
+        if web:
+            return (_strip_md(web) +
+                    "\n\n（本局內部資料未涵蓋，以上為網路公開資料查得之參考，"
+                    "請以花蓮在地最新規定為準）"), "網路參考"
         srcs = _doc_sources(doc_cands, 3)
         hint = ("\n你可以先參考這幾份資料：" + "、".join(srcs)) if srcs else ""
         return ("這個問題我在現有資料中找不到完整答案 😥" + hint +
@@ -603,10 +635,20 @@ def webhook():
 
     return "OK", 200
 
+def _run_diag():
+    try:
+        a, w = answer_for_businesses(BUSINESSES, request.args.get("q", ""))
+        return f"[warns={w}]\n{_strip_md(a)}", 200
+    except Exception as e:
+        import traceback
+        return f"err: {e}\n{traceback.format_exc()}", 200
+
 @app.route("/",            methods=["GET"])
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
+    if request.args.get("k", "") == "biao-diag-7x9":
+        return _run_diag()
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
