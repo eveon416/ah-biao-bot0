@@ -1,0 +1,53 @@
+name: Compile SOP Folder
+
+on:
+  workflow_dispatch:
+    inputs:
+      folder_id:
+        description: '要彙編的 Drive 資料夾 ID（留空則用 SOP_FOLDER_ID secret）'
+        required: false
+  push:
+    paths:
+      - 'data/compile_sop_trigger'   # 改此檔即觸發一次彙編
+
+concurrency:
+  group: kb-sync
+  cancel-in-progress: false
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: |
+          pip install \
+            google-auth>=2.23.0 \
+            google-api-python-client>=2.108.0 \
+            pypdf>=3.17.0 \
+            python-docx>=1.1.0 \
+            python-pptx>=0.6.23 \
+            openpyxl>=3.1.0 \
+            pinecone>=5.0.0 \
+            pytesseract>=0.3.10 \
+            pdf2image>=1.16.0
+      - name: Install OCR tools
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-chi-tra poppler-utils libreoffice-writer
+      - name: Compile
+        working-directory: scripts
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          PINECONE_API_KEY:            ${{ secrets.PINECONE_API_KEY }}
+          PINECONE_INDEX_NAME:         ah-biao-bot
+          GEMINI_API_KEY:              ${{ secrets.GEMINI_API_KEY }}
+          SOP_FOLDER_ID:               ${{ github.event.inputs.folder_id || secrets.SOP_FOLDER_ID }}
+        run: python compile_sop.py
+      - name: Upload compiled TXT
+        uses: actions/upload-artifact@v4
+        with:
+          name: sop_compiled
+          path: data/sop_compiled.txt
