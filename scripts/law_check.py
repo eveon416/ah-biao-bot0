@@ -189,6 +189,9 @@ def _main():
     rows.append([f"（更新時間 {ts}；共 {len(ours)} 部法規，其中 {len(updated_list)} 部有更新）", "", "", "", "", ""])
     write_sheet(rows)
     print(f"完成：我方 {len(ours)} 部法規，{len(updated_list)} 部有更新 → 已寫入「{TAB}」分頁")
+    if os.environ.get("LAW_TEST") == "1" and not updated_list:   # 暫時：強制測試通知
+        updated_list = [("【測試】法規更新通知測試（可忽略並關閉此 Issue）",
+                         "—", "—", "https://law.moj.gov.tw/")]
     notify_github_issue(updated_list)   # 有更新→開 Issue（GitHub 寄信，零設定）
     send_mail(updated_list)             # 若另設了 Gmail App Password，也寄一封正式信
 
