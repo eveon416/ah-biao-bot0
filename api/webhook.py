@@ -605,19 +605,10 @@ def webhook():
 
 def _run_diag():
     try:
-        idx = _get_index()
-        found = {}
-        for ns in ["", "renshi", "zongwu", "gongwen"]:
-            res = idx.query(vector=[0.001]*512, top_k=3000, include_metadata=True,
-                            namespace=ns, filter={"chunk_idx": {"$eq": 0}})
-            for m in res.get("matches", []):
-                t = m.get("metadata", {}).get("text", "")
-                nm = re.search(r"法規名稱[：:]\s*([^\r\n]+)", t)
-                dt = re.search(r"修正日期[：:]\s*民國\s*(\d+)\s*年\s*(\d+)\s*月\s*(\d+)\s*日", t)
-                if nm:
-                    found[nm.group(1).strip()] = (dt.groups() if dt else None)
-        sample = list(found.items())[:8]
-        return f"法規數={len(found)}\n" + "\n".join(f"{k} → {v}" for k, v in sample), 200
+        import importlib, scripts.law_check as L
+        importlib.reload(L)
+        L.main()
+        return "law_check.main() 成功", 200
     except Exception as e:
         import traceback
         return f"err: {e}\n{traceback.format_exc()}", 200
