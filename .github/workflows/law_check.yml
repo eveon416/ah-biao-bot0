@@ -31,5 +31,4 @@ jobs:
           MAIL_TO:                     ${{ secrets.MAIL_TO }}
           GH_TOKEN:                    ${{ secrets.GITHUB_TOKEN }}
           GH_REPO:                     ${{ github.repository }}
-          LAW_TEST:                    "1"
         run: python scripts/law_check.py
