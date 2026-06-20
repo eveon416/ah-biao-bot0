@@ -101,6 +101,34 @@ def write_sheet(rows):
 
 import urllib.parse
 
+# ── Email 通知（只在有更新時寄）──────────────────────────────────────────────
+MAIL_USER = os.environ.get("MAIL_USER", "")     # 寄件 Gmail
+MAIL_PASS = os.environ.get("MAIL_PASS", "")     # Gmail 應用程式密碼
+MAIL_TO   = os.environ.get("MAIL_TO", "h94504709@gmail.com")
+
+def send_mail(updated_list):
+    if not (MAIL_USER and MAIL_PASS and updated_list):
+        if updated_list and not (MAIL_USER and MAIL_PASS):
+            print("有更新但未設定 MAIL_USER/MAIL_PASS，略過寄信")
+        return
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.header import Header
+    lines = ["阿標偵測到下列法規有新版本，建議您更新 Drive 內對應的 .txt 檔：", ""]
+    for name, od, ld, url in updated_list:
+        lines.append(f"・{name}\n    你的版本：{od}　→　最新版本：{ld}\n    {url}")
+    lines.append("")
+    lines.append(f"（共 {len(updated_list)} 部；完整清單見試算表「{TAB}」分頁）")
+    msg = MIMEText("\n".join(lines), "plain", "utf-8")
+    msg["Subject"] = Header(f"【阿標】偵測到 {len(updated_list)} 部法規有更新", "utf-8")
+    msg["From"] = MAIL_USER
+    msg["To"] = MAIL_TO
+    with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as s:
+        s.starttls()
+        s.login(MAIL_USER, MAIL_PASS)
+        s.sendmail(MAIL_USER, [MAIL_TO], msg.as_string())
+    print(f"已寄出更新通知信給 {MAIL_TO}")
+
 def _fmt(n):
     return "" if not n else f"{n//10000}-{n//100%100:02d}-{n%100:02d}"
 
@@ -121,7 +149,7 @@ def _main():
     ours = our_laws()
     latest = official_latest()
     header = ["法規名稱", "我方版本(修正日期)", "線上最新版本", "狀態", "官方連結", "我方檔名"]
-    rows, updated = [header], 0
+    rows, updated_list = [header], []
     for name in sorted(ours):
         od = ours[name]["date"]
         off = latest.get(name)
@@ -131,15 +159,17 @@ def _main():
         elif od is None:
             status = "⚠️我方版本日期讀不到，請查看"
         elif ld > od:
-            status = "⚠️有更新，建議更換"; updated += 1
+            status = "⚠️有更新，建議更換"
+            updated_list.append((name, _fmt(od), _fmt(ld), (off or {}).get("url", "")))
         else:
             status = "✅最新"
         rows.append([name, _fmt(od), _fmt(ld), status,
                      (off or {}).get("url", ""), ours[name]["src"]])
     ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
-    rows.append([f"（更新時間 {ts}；共 {len(ours)} 部法規，其中 {updated} 部有更新）", "", "", "", "", ""])
+    rows.append([f"（更新時間 {ts}；共 {len(ours)} 部法規，其中 {len(updated_list)} 部有更新）", "", "", "", "", ""])
     write_sheet(rows)
-    print(f"完成：我方 {len(ours)} 部法規，{updated} 部有更新 → 已寫入「{TAB}」分頁")
+    print(f"完成：我方 {len(ours)} 部法規，{len(updated_list)} 部有更新 → 已寫入「{TAB}」分頁")
+    send_mail(updated_list)   # 有更新才寄信
 
 if __name__ == "__main__":
     main()

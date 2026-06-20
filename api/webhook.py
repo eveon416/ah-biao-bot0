@@ -603,27 +603,10 @@ def webhook():
 
     return "OK", 200
 
-def _run_diag():
-    try:
-        tab = request.args.get("tab", "法規版本對照")
-        token = _sheets_token()
-        rng = urllib.parse.quote(f"{tab}!A1:F8")
-        url = f"https://sheets.googleapis.com/v4/spreadsheets/{FAQ_SHEET_ID}/values/{rng}"
-        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            j = json.loads(r.read())
-        rows = j.get("values", [])
-        return "\n".join(" | ".join(str(c)[:120] for c in row) for row in rows) or "（空）", 200
-    except Exception as e:
-        import traceback
-        return f"err: {e}\n{traceback.format_exc()}", 200
-
 @app.route("/",            methods=["GET"])
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
-    if request.args.get("k", "") == "biao-diag-7x9":
-        return _run_diag()
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
