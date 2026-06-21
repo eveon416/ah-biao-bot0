@@ -266,8 +266,9 @@ def index_for_bot(data):
             cs = bi.chunk_text(_item_block(it), source, fid, today, ns)
             for c in cs:
                 chunks.append(c)
-                # title-augmented，且把「應辦事項」前置以利檢索命中
-                emb_texts.append(f"{source}\n{no} {it.get('應辦事項','')}\n{c['text']}")
+                # embedding 只放「分類名＋應辦事項」（查詢最像的那句）；重複骨架會稀釋辨識度。
+                # 儲存的 c['text'] 仍是完整項次內容，供答案使用。
+                emb_texts.append(f"{name}　{no}　{it.get('應辦事項','')}")
     if not chunks:
         print("（無台北項次可灌）"); return
     # 同步清掉所有殘留的每項次舊 id（沿用相同 fid → upsert 自然覆蓋；縮減的另清）
