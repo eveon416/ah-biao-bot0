@@ -1,0 +1,42 @@
+name: Taipei SOP Scrape & Monitor
+
+on:
+  schedule:
+    - cron: "0 20 1 * *"   # 每月 1 號 UTC 20:00（台灣 04:00）
+  workflow_dispatch:
+  push:
+    paths:
+      - 'data/taipei_sop_trigger'   # 改此檔即手動觸發
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: |
+          pip install playwright pandas lxml
+          python -m playwright install --with-deps chromium
+      - name: Scrape
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO:  ${{ github.repository }}
+        run: python scripts/taipei_sop_scraper.py
+      - name: Commit snapshot & report
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/taipei_sop || true
+          if git diff --staged --quiet; then echo "no change"; else
+            git commit -m "chore: 台北SOP快照 [$(date -u '+%Y-%m-%d %H:%M')]"
+            for a in 1 2 3; do git pull --rebase --autostash origin main && git push origin main && break; sleep 5; done
+          fi
