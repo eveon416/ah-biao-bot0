@@ -615,6 +615,15 @@ def webhook():
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
+    # 臨時診斷：?k=biao-diag-7x9&q=問題 → 直接跑問答，回傳答案+warns（驗證台北檢索/警示）
+    if request.args.get("k", "") == "biao-diag-7x9":
+        q = request.args.get("q", "").strip()
+        if q:
+            try:
+                ans, w = answer_for_businesses(BUSINESSES, q)
+                return (f"warns={w}\n\n{ans}"), 200
+            except Exception as e:
+                return f"diag錯誤：{e}", 200
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
