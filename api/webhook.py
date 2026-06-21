@@ -183,8 +183,9 @@ FAQ_MATCH_MAX  = 400          # FAQ 數量在此以內 → 全部送 AI 比對�
 _FAQ_CACHE     = {}           # {business_key: (timestamp, [ {q,a} ])}
 
 def _query_docs(idx, qvec, ns, k):
+    # doc=一般文件、taipei_sop=台北採購SOP（參考備援，命中時 webhook 會加台北警示）
     res = idx.query(vector=qvec, top_k=k, include_metadata=True, namespace=ns,
-                    filter={"source_type": {"$eq": "doc"}})
+                    filter={"source_type": {"$in": ["doc", "taipei_sop"]}})
     return [m for m in res.get("matches", []) if m.get("score", 0) > 0.3]
 
 def get_all_faq(business):
