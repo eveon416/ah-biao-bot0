@@ -619,6 +619,19 @@ def health():
     # 臨時診斷：?k=biao-diag-7x9&q=問題 → 直接跑問答，回傳答案+warns（驗證台北檢索/警示）
     if request.args.get("k", "") == "biao-diag-7x9":
         q = request.args.get("q", "").strip()
+        if request.args.get("raw") and q:        # 原始命中：來源/分數/type（不過濾）
+            try:
+                idx = _get_index()
+                qv = _embed(q)
+                res = idx.query(vector=qv, top_k=20, include_metadata=True, namespace="")
+                lines = []
+                for m in res.get("matches", []):
+                    md = m.get("metadata", {})
+                    lines.append(f"{m.get('score',0):.3f} | {md.get('source_type','?')} | "
+                                 f"{md.get('source','')[:40]}")
+                return "namespace=採購('') top20:\n" + "\n".join(lines), 200
+            except Exception as e:
+                return f"raw錯誤：{e}", 200
         if q:
             try:
                 ans, w = answer_for_businesses(BUSINESSES, q)
