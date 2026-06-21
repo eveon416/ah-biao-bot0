@@ -619,15 +619,17 @@ def health():
     # 臨時診斷：?k=biao-diag-7x9&q=問題 → 直接跑問答，回傳答案+warns（驗證台北檢索/警示）
     if request.args.get("k", "") == "biao-diag-7x9":
         q = request.args.get("q", "").strip()
-        if request.args.get("st"):               # 只看某 source_type 的向量是否存在
+        if request.args.get("st"):               # 某 source_type：有 q 就用真實查詢向量看分數
             try:
                 idx = _get_index()
-                res = idx.query(vector=[0.001] * 512, top_k=20, include_metadata=True,
+                qv = _embed(q) if q else [0.001] * 512
+                res = idx.query(vector=qv, top_k=20, include_metadata=True,
                                 namespace="", filter={"source_type": {"$eq": request.args["st"]}})
                 ms = res.get("matches", [])
                 return (f"source_type={request.args['st']} 命中 {len(ms)} 筆:\n" +
-                        "\n".join(md.get("source", "")[:50]
-                                  for md in (m.get("metadata", {}) for m in ms))), 200
+                        "\n".join(f"{m.get('score',0):.3f} | {m.get('metadata',{}).get('source','')[:30]}"
+                                  f" | {m.get('metadata',{}).get('text','')[:45]}"
+                                  for m in ms)), 200
             except Exception as e:
                 return f"st錯誤：{e}", 200
         if request.args.get("raw") and q:        # 原始命中：來源/分數/type（不過濾）
