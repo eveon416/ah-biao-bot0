@@ -33,7 +33,8 @@ def _clean(s):
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", s or "")).replace("&nbsp;", " ").strip()
 
 def parse_table(html, code):
-    """解析 gv_List 表格 → 每個項次一筆結構化資料（用 pandas 處理 rowspan）。"""
+    """解析 gv_List 表格 → 結構化資料（用 pandas 處理 rowspan，並去掉 rowspan 造成的重複列）。
+    保留有意義的子項（同代碼但應辦事項不同），合併重複列的附件檔名。"""
     import pandas as pd
     import io
     m = re.search(r"<table[^>]*gv_List[\s\S]*?</table>", html, re.I)
@@ -51,29 +52,33 @@ def parse_table(html, code):
                 v = row.get(k, "")
                 return _clean("" if pd.isna(v) else str(v))
         return ""
-    items, cur = [], None
     code_re = re.compile(r"^[A-C]\.?\d+(?:\.\d+)+")
+    ATT = ["公文範本", "使用表單", "實例", "標準作業流程"]
+    seen, order = {}, []
     for _, row in df.iterrows():
-        no = _clean(str(row.get(df.columns[0], "")))
+        c0 = _clean(str(row.get(df.columns[0], "")))
+        mm = code_re.match(c0)
+        if not mm:
+            continue
+        no = mm.group(0)
         item = col(row, "應辦事項")
-        if code_re.match(no):                       # 新項次
-            cur = {
-                "項次": no.split()[0],
-                "應辦事項": item,
-                "權責分工": {k: col(row, k) for k in
-                            ["施工廠商", "監造廠商", "設計廠商", "機關", "維護"]},
-                "辦理期限": col(row, "期限"),
-                "法令依據": col(row, "法令依據", "法令"),
-                "控制重點": col(row, "控制重點"),
-                "範本表單": [],
-            }
-            items.append(cur)
-        elif cur is not None:                        # 接續列：補進附件檔名/延續文字
-            extra = " ".join(_clean(str(v)) for v in row.values
-                             if v is not None and str(v) != "nan").strip()
-            if extra:
-                cur["範本表單"].append(extra)
-    return items
+        atts = [col(row, a) for a in ATT]
+        atts = [a for a in atts if a and re.search(r"\.\w{2,5}$", a)]   # 像檔名的才收
+        key = (no, item)
+        if key in seen:                              # rowspan 重複列 → 只併附件
+            seen[key]["範本表單"] = list(dict.fromkeys(seen[key]["範本表單"] + atts))
+            continue
+        seen[key] = {
+            "項次": no, "應辦事項": item,
+            "權責分工": {k: col(row, k) for k in
+                        ["施工廠商", "監造廠商", "設計廠商", "機關", "維護"]},
+            "辦理期限": col(row, "期限"),
+            "法令依據": col(row, "法令依據", "法令"),
+            "控制重點": col(row, "控制重點"),
+            "範本表單": atts,
+        }
+        order.append(key)
+    return [seen[k] for k in order]
 
 def scrape():
     out, problems = {}, []
@@ -94,21 +99,27 @@ def scrape():
                 html = page.content()
                 ok_name = name in html
                 items = parse_table(html, code)
+                codes = []
+                for it in items:
+                    if it["項次"] not in codes:
+                        codes.append(it["項次"])
+                n_codes = len(codes)
                 base = BASELINE.get(code, 0)
                 note = ""
                 if not ok_name:
                     note = f"頁面找不到分類名稱「{name}」(疑似抓錯/污染)"
                 elif not items:
                     note = "解析不到任何項次"
-                elif base and abs(len(items) - base) > max(2, base * 0.4):
-                    note = f"項次數 {len(items)} 與舊版 {base} 差異過大"
+                elif base and abs(n_codes - base) > max(2, base * 0.4):
+                    note = f"項次代碼數 {n_codes} 與舊版 {base} 差異過大"
                 if note:
                     problems.append(f"{code} {name}：{note}")
-                out[code] = {"name": name, "item_count": len(items),
-                             "first": items[0]["項次"] if items else None,
-                             "last": items[-1]["項次"] if items else None,
+                out[code] = {"name": name, "code_count": n_codes, "item_count": len(items),
+                             "first": codes[0] if codes else None,
+                             "last": codes[-1] if codes else None,
                              "ok_name": ok_name, "items": items}
-                print(f"  {code} {name}：{len(items)} 項" + (f"  ⚠ {note}" if note else "  ✓"), flush=True)
+                print(f"  {code} {name}：{n_codes} 代碼/{len(items)} 列"
+                      + (f"  ⚠ {note}" if note else "  ✓"), flush=True)
             except Exception as e:
                 problems.append(f"{code} {name}：抓取例外 {e}")
                 out[code] = {"name": name, "item_count": 0, "items": [], "error": str(e)}
@@ -156,13 +167,15 @@ def main():
 
     # 摘要報告
     lines = [f"# 台北採購SOP 抓取摘要（{today}）", ""]
-    lines.append("| 分類 | 名稱 | 抓到項次 | 舊版 | 起–訖 | 狀態 |")
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("| 分類 | 名稱 | 項次代碼數 | 舊版 | 含子項列數 | 起–訖 | 狀態 |")
+    lines.append("|---|---|---|---|---|---|---|")
     for code, name in CATEGORIES:
         d = data.get(code, {})
         base = BASELINE.get(code, "-")
-        st = "✅" if d.get("ok_name") and d.get("item_count") else "⚠️需檢查"
-        lines.append(f"| {code} | {name} | {d.get('item_count',0)} | {base} | "
+        nc = d.get("code_count", 0)
+        ok = d.get("ok_name") and nc and (not base or abs(nc - base) <= max(2, base * 0.4))
+        st = "✅" if ok else "⚠️需檢查"
+        lines.append(f"| {code} | {name} | {nc} | {base} | {d.get('item_count',0)} | "
                      f"{d.get('first','-')}–{d.get('last','-')} | {st} |")
     if problems:
         lines += ["", "## ⚠️ 需人工檢查", *[f"- {x}" for x in problems]]
