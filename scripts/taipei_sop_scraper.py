@@ -240,7 +240,8 @@ def _item_block(it):
     return "\n".join(parts)
 
 def index_for_bot(data):
-    """把台北SOP灌進阿標 Pinecone（採購 namespace=''）。每分類一份文件、可重灌覆蓋。"""
+    """把台北SOP灌進阿標 Pinecone（採購 namespace=''）。
+    一個「項次」一個 chunk（聚焦 embedding，才檢索得到）；可重灌覆蓋。"""
     if not (os.environ.get("PINECONE_API_KEY") and os.environ.get("GEMINI_API_KEY")):
         print("（無 PINECONE/GEMINI 金鑰，略過灌入阿標）"); return
     import sys
@@ -250,24 +251,30 @@ def index_for_bot(data):
     import hashlib as _h
     pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
     index = bi.get_index(pc)
-    ns, total = "", 0
+    ns, today = "", datetime.date.today().isoformat()
+    chunks, emb_texts = [], []
     for code, name in CATEGORIES:
         items = (data.get(code, {}) or {}).get("items", [])
-        if not items:
-            continue
-        fid = f"TAIPEI_SOP_{code}"
-        source = f"{TAIPEI_SRC_TAG}-{code} {name}（參考）"
-        body = f"{source}\n\n" + "\n\n".join(_item_block(it) for it in items)
-        chunks = bi.chunk_text(body, source, fid, datetime.date.today().isoformat(), ns)
-        # 先刪舊向量（id 由 file_id+idx 決定，清 0..300 確保縮減時不殘留）
-        old_ids = [_h.md5(f"{fid}:{i}".encode()).hexdigest() for i in range(300)]
+        # 清舊向量：舊版「整分類一塊」(TAIPEI_SOP_{code}) + 本版每項次
+        old_ids = [_h.md5(f"TAIPEI_SOP_{code}:{i}".encode()).hexdigest() for i in range(300)]
         try: index.delete(ids=old_ids, namespace=ns)
         except Exception: pass
-        embs = bi.embed([f"{c['source']}\n{c['text']}" for c in chunks])  # title-augmented
-        bi.upsert(index, ns, chunks, embs, "taipei_sop")
-        total += len(chunks)
-        print(f"  灌入 {code} {name}：{len(chunks)} chunks", flush=True)
-    print(f"已灌入阿標（採購 namespace）：{total} chunks，來源標記「{TAIPEI_SRC_TAG}」", flush=True)
+        source = f"{TAIPEI_SRC_TAG}-{code} {name}（參考）"
+        for it in items:
+            no = it.get("項次", "")
+            fid = f"TAIPEI_SOP_{code}_{no}"          # 每項次獨立 file_id
+            cs = bi.chunk_text(_item_block(it), source, fid, today, ns)
+            for c in cs:
+                chunks.append(c)
+                # title-augmented，且把「應辦事項」前置以利檢索命中
+                emb_texts.append(f"{source}\n{no} {it.get('應辦事項','')}\n{c['text']}")
+    if not chunks:
+        print("（無台北項次可灌）"); return
+    # 同步清掉所有殘留的每項次舊 id（沿用相同 fid → upsert 自然覆蓋；縮減的另清）
+    embs = bi.embed(emb_texts)
+    bi.upsert(index, ns, chunks, embs, "taipei_sop")
+    print(f"已灌入阿標（採購 namespace）：{len(chunks)} chunks（每項次一片），"
+          f"來源標記「{TAIPEI_SRC_TAG}」", flush=True)
 
 def main():
     os.makedirs(SNAPDIR, exist_ok=True)
