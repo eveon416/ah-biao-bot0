@@ -52,7 +52,10 @@ def parse_table(html, code):
                 v = row.get(k, "")
                 return _clean("" if pd.isna(v) else str(v))
         return ""
-    code_re = re.compile(r"^[A-C]\.?\d+(?:\.\d+)+")
+    # 項次代碼：開頭字母「可選」(台北網站偶爾漏打字母，如 A2.7 變「2.7」)
+    code_re = re.compile(r"^([A-C])?\.?\d+(?:\.\d+)+")
+    cat_letter = code[0]
+    is_file = lambda s: bool(re.search(r"\.\w{2,5}$", s or ""))
     ATT = ["公文範本", "使用表單", "實例", "標準作業流程"]
     seen, order = {}, []
     for _, row in df.iterrows():
@@ -61,7 +64,11 @@ def parse_table(html, code):
         if not mm:
             continue
         no = mm.group(0)
+        if not no[:1].isalpha():
+            no = cat_letter + no                      # 補回缺漏的類別字母：2.7 → A2.7
         item = col(row, "應辦事項")
+        if not item or is_file(item) or item == c0:   # 過濾附件檔名列、空列
+            continue
         atts = [col(row, a) for a in ATT]
         atts = [a for a in atts if a and re.search(r"\.\w{2,5}$", a)]   # 像檔名的才收
         key = (no, item)
