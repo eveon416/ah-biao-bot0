@@ -23,13 +23,16 @@ jobs:
           python-version: "3.11"
       - name: Install deps
         run: |
-          pip install playwright pandas lxml "google-auth>=2.23.0" "requests>=2.31.0"
+          pip install playwright pandas lxml "google-auth>=2.23.0" "requests>=2.31.0" "pinecone>=5.0.0" google-api-python-client
           python -m playwright install --with-deps chromium
       - name: Scrape
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO:  ${{ github.repository }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+          PINECONE_INDEX_NAME: ah-biao-bot
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python scripts/taipei_sop_scraper.py
       - name: Commit snapshot & report
         if: always()

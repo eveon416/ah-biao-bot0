@@ -489,9 +489,17 @@ def answer_for_businesses(businesses, question):
     name_flag = "[HASNAME]" in raw
     answer = raw.replace("[HASNAME]", "").replace("[NOTFOUND]", "").strip()
     cites = (["FAQ"] if faq_ctx else []) + _doc_sources(doc_cands)
+    # 台北SOP警示：依來源判斷（非靠模型猜），只要引用到台北資料就加註
+    taipei_used = any("台北市採購SOP" in c for c in cites)
     if cites:
         answer += "\n\n（依據：" + "、".join(cites) + "）"
+    if taipei_used:
+        answer += ("\n\n⚠️ 提醒：以上內容含「台北市採購作業程序」之參考做法，"
+                   "台北市專屬規定未必適用本局，請以花蓮在地法規與作業規定為準，"
+                   "並與承辦單位確認。")
     warns = compute_warnings(answer, doc_cands, name_flag)
+    if taipei_used:
+        warns = (warns + "、含台北參考").strip("、") if warns else "含台北參考"
     return answer, warns
 
 # ── LINE ─────────────────────────────────────────────────────────────────────
@@ -603,34 +611,10 @@ def webhook():
 
     return "OK", 200
 
-def _run_diag():
-    tab = request.args.get("tab", "台北SOP骨架")
-    try:
-        token = _sheets_token()
-        rng = urllib.parse.quote(f"{tab}!A1:J6")
-        url = f"https://sheets.googleapis.com/v4/spreadsheets/{FAQ_SHEET_ID}/values/{rng}"
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"}), timeout=20) as r:
-            rows = json.loads(r.read()).get("values", [])
-        # 也回報總列數
-        rng2 = urllib.parse.quote(f"{tab}!A:A")
-        with urllib.request.urlopen(urllib.request.Request(
-                f"https://sheets.googleapis.com/v4/spreadsheets/{FAQ_SHEET_ID}/values/{rng2}",
-                headers={"Authorization": f"Bearer {token}"}), timeout=20) as r:
-            total = len(json.loads(r.read()).get("values", []))
-        out = [f"分頁「{tab}」總列數：{total}"]
-        for row in rows:
-            out.append(" | ".join(str(c)[:24] for c in row))
-        return "\n".join(out), 200
-    except Exception as e:
-        import traceback
-        return f"err: {e}\n{traceback.format_exc()[:400]}", 200
-
 @app.route("/",            methods=["GET"])
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
-    if request.args.get("k", "") == "biao-diag-7x9":
-        return _run_diag()
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()

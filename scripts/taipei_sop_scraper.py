@@ -227,6 +227,48 @@ def write_skeleton(data):
           {"values": out})
     print(f"已寫入「{SKTAB}」分頁：{len(out)-1} 列（保留 {len(keep)} 列既有策展）", flush=True)
 
+# ── 灌進阿標（採購 namespace，來源標「台北市採購SOP」供 webhook 加警示）─────────
+TAIPEI_SRC_TAG = "台北市採購SOP"   # webhook 以此字串判斷是否加台北警示語
+
+def _item_block(it):
+    duty = "；".join(f"{k}{v}" for k, v in it.get("權責分工", {}).items() if v)
+    parts = [f"項次 {it.get('項次','')}　{it.get('應辦事項','')}"]
+    if duty:               parts.append(f"權責分工：{duty}")
+    if it.get("辦理期限"):  parts.append(f"辦理期限：{it['辦理期限']}")
+    if it.get("法令依據"):  parts.append(f"法令依據：{it['法令依據']}")
+    if it.get("控制重點"):  parts.append(f"控制重點：{it['控制重點']}")
+    return "\n".join(parts)
+
+def index_for_bot(data):
+    """把台北SOP灌進阿標 Pinecone（採購 namespace=''）。每分類一份文件、可重灌覆蓋。"""
+    if not (os.environ.get("PINECONE_API_KEY") and os.environ.get("GEMINI_API_KEY")):
+        print("（無 PINECONE/GEMINI 金鑰，略過灌入阿標）"); return
+    import sys
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    import build_index as bi
+    from pinecone import Pinecone
+    import hashlib as _h
+    pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
+    index = bi.get_index(pc)
+    ns, total = "", 0
+    for code, name in CATEGORIES:
+        items = (data.get(code, {}) or {}).get("items", [])
+        if not items:
+            continue
+        fid = f"TAIPEI_SOP_{code}"
+        source = f"{TAIPEI_SRC_TAG}-{code} {name}（參考）"
+        body = f"{source}\n\n" + "\n\n".join(_item_block(it) for it in items)
+        chunks = bi.chunk_text(body, source, fid, datetime.date.today().isoformat(), ns)
+        # 先刪舊向量（id 由 file_id+idx 決定，清 0..300 確保縮減時不殘留）
+        old_ids = [_h.md5(f"{fid}:{i}".encode()).hexdigest() for i in range(300)]
+        try: index.delete(ids=old_ids, namespace=ns)
+        except Exception: pass
+        embs = bi.embed([f"{c['source']}\n{c['text']}" for c in chunks])  # title-augmented
+        bi.upsert(index, ns, chunks, embs, "taipei_sop")
+        total += len(chunks)
+        print(f"  灌入 {code} {name}：{len(chunks)} chunks", flush=True)
+    print(f"已灌入阿標（採購 namespace）：{total} chunks，來源標記「{TAIPEI_SRC_TAG}」", flush=True)
+
 def main():
     os.makedirs(SNAPDIR, exist_ok=True)
     prev = latest_snapshot()
@@ -270,6 +312,12 @@ def main():
         write_skeleton(data)
     except Exception as e:
         print(f"骨架表寫入失敗：{e}", flush=True)
+
+    # 灌進阿標（讓阿標可回答台北SOP；webhook 會自動加台北警示）
+    try:
+        index_for_bot(data)
+    except Exception as e:
+        print(f"灌入阿標失敗：{e}", flush=True)
 
     # 有異動 → 開 Issue 通知（人工決策，不自動更新索引）
     if prev and changes:
