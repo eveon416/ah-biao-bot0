@@ -603,10 +603,34 @@ def webhook():
 
     return "OK", 200
 
+def _run_diag():
+    tab = request.args.get("tab", "台北SOP骨架")
+    try:
+        token = _sheets_token()
+        rng = urllib.parse.quote(f"{tab}!A1:J6")
+        url = f"https://sheets.googleapis.com/v4/spreadsheets/{FAQ_SHEET_ID}/values/{rng}"
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"}), timeout=20) as r:
+            rows = json.loads(r.read()).get("values", [])
+        # 也回報總列數
+        rng2 = urllib.parse.quote(f"{tab}!A:A")
+        with urllib.request.urlopen(urllib.request.Request(
+                f"https://sheets.googleapis.com/v4/spreadsheets/{FAQ_SHEET_ID}/values/{rng2}",
+                headers={"Authorization": f"Bearer {token}"}), timeout=20) as r:
+            total = len(json.loads(r.read()).get("values", []))
+        out = [f"分頁「{tab}」總列數：{total}"]
+        for row in rows:
+            out.append(" | ".join(str(c)[:24] for c in row))
+        return "\n".join(out), 200
+    except Exception as e:
+        import traceback
+        return f"err: {e}\n{traceback.format_exc()[:400]}", 200
+
 @app.route("/",            methods=["GET"])
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
+    if request.args.get("k", "") == "biao-diag-7x9":
+        return _run_diag()
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
