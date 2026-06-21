@@ -23,7 +23,7 @@ jobs:
           python-version: "3.11"
       - name: Install deps
         run: |
-          pip install playwright pandas lxml "google-auth>=2.23.0"
+          pip install playwright pandas lxml "google-auth>=2.23.0" "requests>=2.31.0"
           python -m playwright install --with-deps chromium
       - name: Scrape
         env:
