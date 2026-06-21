@@ -23,12 +23,13 @@ jobs:
           python-version: "3.11"
       - name: Install deps
         run: |
-          pip install playwright pandas lxml
+          pip install playwright pandas lxml "google-auth>=2.23.0"
           python -m playwright install --with-deps chromium
       - name: Scrape
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO:  ${{ github.repository }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: python scripts/taipei_sop_scraper.py
       - name: Commit snapshot & report
         if: always()

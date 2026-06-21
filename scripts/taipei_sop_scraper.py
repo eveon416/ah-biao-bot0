@@ -163,6 +163,70 @@ def diff(old, new):
                 changes.append(f"[修改] {k} {nn[k].get('應辦事項','')}")
     return changes
 
+# ── 寫「台北SOP骨架」試算表分頁（保留使用者策展的兩欄）──────────────────────
+SHEET = os.environ.get("FAQ_SHEET_ID", "1Co7vSpCJ2NqQ8HLSQIPSg3TIO7R6vqBBX-YbWUCtscw")
+SKTAB = "台北SOP骨架"
+HEADER = ["分類", "項次", "應辦事項", "權責分工", "辦理期限", "法令依據",
+          "控制重點", "是否台北專屬", "花蓮對應依據/做法", "本月異動"]
+
+def _sheet_token():
+    from google.oauth2 import service_account
+    import google.auth.transport.requests
+    info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+    creds = service_account.Credentials.from_service_account_info(
+        info, scopes=["https://www.googleapis.com/auth/spreadsheets"])
+    creds.refresh(google.auth.transport.requests.Request())
+    return creds.token
+
+def _sreq(method, path, body=None):
+    import urllib.request, urllib.parse
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        f"https://sheets.googleapis.com/v4/spreadsheets/{path}", data=data, method=method,
+        headers={"Authorization": f"Bearer {_sheet_token()}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read())
+
+def write_skeleton(data):
+    if not os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"):
+        print("（無 SA，略過骨架表）"); return
+    import urllib.parse
+    # 1) 讀現有分頁，保留使用者填的「台北專屬/花蓮對應」兩欄（key=分類+項次+應辦事項）
+    meta = _sreq("GET", f"{SHEET}?fields=sheets.properties.title")
+    tabs = [s["properties"]["title"] for s in meta.get("sheets", [])]
+    keep, old_scrape = {}, {}
+    if SKTAB in tabs:
+        rng = urllib.parse.quote(f"{SKTAB}!A2:I10000")
+        rows = _sreq("GET", f"{SHEET}/values/{rng}").get("values", [])
+        for r in rows:
+            r = (r + [""] * 9)[:9]
+            k = (r[0], r[1], r[2])
+            keep[k] = (r[7], r[8])                      # 台北專屬, 花蓮對應
+            old_scrape[k] = (r[3], r[4], r[5], r[6])    # 抓取欄位（比對是否異動）
+    else:
+        _sreq("POST", f"{SHEET}:batchUpdate", {"requests": [{"addSheet": {
+            "properties": {"title": SKTAB, "gridProperties": {"frozenRowCount": 1}}}}]})
+
+    # 2) 組新列，保留兩欄、標記本月異動
+    out = [HEADER]
+    for code, name in CATEGORIES:
+        for it in (data.get(code, {}) or {}).get("items", []):
+            duty = "；".join(f"{k}{v}" for k, v in it.get("權責分工", {}).items() if v)
+            scrape = (it.get("應辦事項", ""), it.get("辦理期限", ""),
+                      it.get("法令依據", ""), it.get("控制重點", ""))
+            key = (code, it.get("項次", ""), it.get("應辦事項", ""))
+            tp, hl = keep.get(key, ("", ""))
+            new_scrape = (duty, scrape[1], scrape[2], scrape[3])   # 權責,期限,法令,控制
+            changed = "★更新" if (key in old_scrape and old_scrape[key] != new_scrape) else ""
+            out.append([code, it.get("項次", ""), scrape[0], duty, scrape[1],
+                        scrape[2], scrape[3], tp, hl, changed])
+
+    rng = urllib.parse.quote(f"{SKTAB}!A1:J10000")
+    _sreq("POST", f"{SHEET}/values/{rng}:clear", {})
+    _sreq("PUT", f"{SHEET}/values/{urllib.parse.quote(SKTAB + '!A1')}?valueInputOption=RAW",
+          {"values": out})
+    print(f"已寫入「{SKTAB}」分頁：{len(out)-1} 列（保留 {len(keep)} 列既有策展）", flush=True)
+
 def main():
     os.makedirs(SNAPDIR, exist_ok=True)
     prev = latest_snapshot()
@@ -200,6 +264,12 @@ def main():
         f.write(report)
     print("\n" + report, flush=True)
     print(f"\n快照：{snap_path}", flush=True)
+
+    # 寫骨架表（保留使用者策展兩欄、標記異動列）
+    try:
+        write_skeleton(data)
+    except Exception as e:
+        print(f"骨架表寫入失敗：{e}", flush=True)
 
     # 有異動 → 開 Issue 通知（人工決策，不自動更新索引）
     if prev and changes:
