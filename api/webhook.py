@@ -637,7 +637,7 @@ def health():
         if request.args.get("ls"):   # 列採購庫所有來源（假向量，不算 Gemini，完全免費）
             try:
                 idx = _get_index()
-                res = idx.query(vector=[0.001] * 512, top_k=1000, include_metadata=True,
+                res = idx.query(vector=[0.001] * 512, top_k=10000, include_metadata=True,
                                 namespace="", filter={"source_type": {"$eq": "doc"}})
                 srcs = {}
                 for m in res.get("matches", []):
