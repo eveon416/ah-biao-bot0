@@ -183,9 +183,9 @@ FAQ_MATCH_MAX  = 400          # FAQ 數量在此以內 → 全部送 AI 比對�
 _FAQ_CACHE     = {}           # {business_key: (timestamp, [ {q,a} ])}
 
 def _query_docs(idx, qvec, ns, k):
-    # doc=一般文件、taipei_sop=台北採購SOP（參考備援，命中時 webhook 會加台北警示）
+    # 只取一般文件（台北 taipei_sop 暫時擱置，之後用「花蓮優先、台北備援」設計再啟用）
     res = idx.query(vector=qvec, top_k=k, include_metadata=True, namespace=ns,
-                    filter={"source_type": {"$in": ["doc", "taipei_sop"]}})
+                    filter={"source_type": {"$eq": "doc"}})
     return [m for m in res.get("matches", []) if m.get("score", 0) > 0.3]
 
 def get_all_faq(business):
@@ -318,15 +318,24 @@ def fetch_full_doc(idx, ns, file_id, focus=None):
         print(f"還原完整文件失敗：{e}")
         return "", ""
 
-def _multi_query_docs(idx, qvecs, ns, k_each=6):
-    """多查詢擴展：用預先算好的查詢向量各檢索，合併去重，取分數最高的一批。"""
+def _multi_query_docs(idx, qvecs, ns, k_each=18):
+    """多查詢擴展：用預先算好的查詢向量各檢索，合併去重，取分數最高的一批。
+    k_each 拉寬(6→18)避免相關文件被『萬用樣板檔』埋掉；再做同來源上限避免洗版。"""
     best = {}
     for qv in qvecs:
         for m in _query_docs(idx, qv, ns, k_each):
             mid = m.get("id")
             if mid not in best or m.get("score", 0) > best[mid].get("score", 0):
                 best[mid] = m
-    return sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)
+    ranked = sorted(best.values(), key=lambda m: m.get("score", 0), reverse=True)
+    # 同來源最多保留 2 片候選，讓更多相關文件有機會入選(還原時仍會抓整份，不損內容)
+    capped, per_src = [], {}
+    for m in ranked:
+        src = m.get("metadata", {}).get("source", "")
+        per_src[src] = per_src.get(src, 0) + 1
+        if per_src[src] <= 2:
+            capped.append(m)
+    return capped
 
 def answer_for_business(business, question):
     return answer_for_businesses([business], question)
@@ -452,6 +461,12 @@ def answer_for_businesses(businesses, question):
         "就一定要直接列出該數字或條文內容；不可只回「請查閱」「系統會檢核」「向人事/承辦單位諮詢」"
         "而不給出文件已寫明的答案。優先採用正式法規/規則的條文，不要被周邊文件（如系統招標規範）的"
         "概略描述帶偏。\n"
+        "【合規與出處（依法行政，務必遵守）】"
+        "(1) 只依下列文件內容回答，文件沒寫的一律不可自行臆測或用常識補；"
+        "(2) 涉及法規時，標明依據的『法規名稱＋條號』（例如「依政府採購法第22條」），讓使用者能查證；"
+        "(3) 區分「法規規定（依法必須）」與「本局作業做法（實務）」，不可把做法當成法規講；"
+        "(4) 若文件中找不到明確依據，寧可回「目前查無明確法規依據，建議洽承辦或政風確認」，"
+        "也不可編造一個可能違法的答案。\n"
         "若是綜覽性、流程性問題，請完整有條理地回答（可分階段、分點），"
         "先給整體架構；內容很多時最後主動說明可針對哪部分再深入詢問。\n"
         "若標準答案與文件都無法回答，最後另起一行單獨輸出 [NOTFOUND]。\n"
@@ -616,6 +631,23 @@ def webhook():
 @app.route("/webhook",     methods=["GET"])
 @app.route("/api/webhook", methods=["GET"])
 def health():
+    # 暫時：檢索自檢 ?k=biao-rx-7q&q=問題 → 只算查詢向量+查Pinecone，不跑生成（近乎免費）
+    if request.args.get("k", "") == "biao-rx-7q":
+        q = request.args.get("q", "").strip()
+        if q:
+            try:
+                idx = _get_index()
+                qv = _embed(q)
+                ms = _query_docs(idx, qv, "", 30)
+                seen, out = {}, []
+                for m in sorted(ms, key=lambda x: x.get("score", 0), reverse=True):
+                    s = m.get("metadata", {}).get("source", "")
+                    seen[s] = seen.get(s, 0) + 1
+                    if seen[s] <= 2:
+                        out.append(f"{m.get('score', 0):.3f}  {s[:46]}")
+                return "\n".join(out[:12]) or "(無命中)", 200
+            except Exception as e:
+                return f"rx錯誤：{e}", 200
     try:
         idx = _get_index()
         stats = idx.describe_index_stats()
