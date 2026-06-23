@@ -29,7 +29,7 @@ PINECONE_API_KEY    = os.environ.get("PINECONE_API_KEY", "")
 PINECONE_INDEX_NAME = os.environ.get("PINECONE_INDEX_NAME", "ah-biao-bot")
 SA_JSON             = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 LINE_REPLY_URL      = "https://api.line.me/v2/bot/message/reply"
-EMBED_MODEL_NAME    = "gemini-embedding-001"
+EMBED_MODEL_NAME    = "BAAI/bge-small-zh-v1.5"   # 免費本地弱模型（還原成免費版；生成仍 Gemini 免費額度）
 GEN_MODEL           = "gemini-2.5-flash"
 TOP_K               = 8
 TRIGGER             = "阿標"
@@ -77,29 +77,23 @@ def _get_index():
         _pinecone_index = Pinecone(api_key=PINECONE_API_KEY).Index(PINECONE_INDEX_NAME)
     return _pinecone_index
 
-# ── 查詢嵌入：Gemini 付費強模型（gemini-embedding-001，512維，查詢用 taskType）──
+# ── 查詢嵌入：fastembed bge-small（免費本地弱模型，512維；與建索引一致）──────────
 EMBED_DIM = 512
 
-def _l2norm(v):
-    s = sum(x * x for x in v) ** 0.5
-    return [x / s for x in v] if s else v
-
-def _gemini_embed(texts, task):
-    """Gemini 批次嵌入：512維、依用途帶 taskType、回傳正規化向量（與索引一致）。"""
-    reqs = [{"model": "models/gemini-embedding-001",
-             "content": {"parts": [{"text": (t or " ")}]},
-             "outputDimensionality": EMBED_DIM,
-             "taskType": task} for t in texts]
-    resp = _gemini_post("models/gemini-embedding-001:batchEmbedContents",
-                        {"requests": reqs})
-    return [_l2norm(e["values"]) for e in resp["embeddings"]]
+_embed_model = None
+def _get_embed_model():
+    global _embed_model
+    if _embed_model is None:
+        from fastembed import TextEmbedding
+        _embed_model = TextEmbedding(model_name=EMBED_MODEL_NAME, cache_dir="/tmp/fastembed_cache")
+    return _embed_model
 
 def _embed(text):
-    return _gemini_embed([text], "RETRIEVAL_QUERY")[0]
+    return list(_get_embed_model().query_embed([text]))[0].tolist()
 
 def _embed_many(texts):
-    """一次批次嵌入多個查詢（Gemini 強模型，查詢專用 taskType）。"""
-    return _gemini_embed(texts, "RETRIEVAL_QUERY")
+    """一次嵌入多個查詢（本地 bge-small，查詢用 query_embed）。"""
+    return [v.tolist() for v in _get_embed_model().query_embed(list(texts))]
 
 # ── Gemini 生成（urllib，多模型備援抗 429/503）──────────────────────────────
 GEN_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
@@ -683,6 +677,7 @@ def health():
         ns_info = stats.get("namespaces", {}) if isinstance(stats, dict) else {}
         biz = "、".join(b["name"] for b in BUSINESSES)
         return (f"✅ 阿標多業務 RAG 運行中\n啟用業務：{biz}\n"
+                f"嵌入模型：{EMBED_MODEL_NAME}\n"
                 f"向量總數：{stats.get('total_vector_count', '?')}\n"
                 f"namespaces：{list(ns_info.keys())}"), 200
     except Exception as e:
