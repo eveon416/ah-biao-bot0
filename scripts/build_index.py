@@ -385,37 +385,19 @@ def chunk_text(text, source, file_id, modified, namespace):
         idx += 1
     return out
 
-# ── Embedding：Gemini 付費強模型（gemini-embedding-001，512維，文件用 taskType）──
-def _l2(v):
-    s = sum(x * x for x in v) ** 0.5
-    return [x / s for x in v] if s else v
-
-def _gemini_embed_batch(texts):
-    reqs = [{"model": "models/gemini-embedding-001",
-             "content": {"parts": [{"text": (t or " ")}]},
-             "outputDimensionality": EMBED_DIM,
-             "taskType": "RETRIEVAL_DOCUMENT"} for t in texts]
-    body = json.dumps({"requests": reqs}).encode()
-    url = ("https://generativelanguage.googleapis.com/v1beta/"
-           f"models/gemini-embedding-001:batchEmbedContents?key={GEMINI_API_KEY}")
-    last = ""
-    for attempt in range(6):
-        try:
-            req = urllib.request.Request(url, data=body,
-                                         headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=120) as r:
-                j = json.loads(r.read())
-            return [_l2(e["values"]) for e in j["embeddings"]]
-        except Exception as e:
-            last = str(e)
-            time.sleep(6)          # 429/暫時性 → 退避重試
-    raise RuntimeError(f"Gemini 嵌入失敗：{last}")
+# ── Embedding：fastembed bge-small（免費本地弱模型，512維；與查詢端一致）──────────
+_model = None
+def get_model():
+    global _model
+    if _model is None:
+        from fastembed import TextEmbedding
+        print(f"  載入本地 embedding 模型 {EMBED_MODEL_NAME} ...", flush=True)
+        _model = TextEmbedding(model_name=EMBED_MODEL_NAME)
+    return _model
 
 def embed(texts):
-    out = []
-    for i in range(0, len(texts), 100):        # batchEmbedContents 單批上限保守取 100
-        out.extend(_gemini_embed_batch(texts[i:i+100]))
-    return out
+    # 文件用 passage embedding（與 webhook 查詢的 query_embed 配對，bge 檢索模式）
+    return [e.tolist() for e in get_model().embed(list(texts), batch_size=EMBED_BATCH)]
 
 # ── Pinecone ─────────────────────────────────────────────────────────────────
 def get_index(pc):
