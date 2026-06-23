@@ -655,9 +655,21 @@ def health():
             try:
                 idx = _get_index()
                 qv = _embed(q)
-                ms = _query_docs(idx, qv, "", 30)
+                res = idx.query(vector=qv, top_k=100, include_metadata=True,
+                                namespace="", filter={"source_type": {"$eq": "doc"}})
+                allm = sorted(res.get("matches", []), key=lambda x: x.get("score", 0), reverse=True)
+                find = request.args.get("find", "")
+                if find:   # 掃前100名，列出檔名含 find 的（看法規有沒有進索引、排第幾）
+                    hits = [(i, m) for i, m in enumerate(allm, 1)
+                            if find in m.get("metadata", {}).get("source", "")]
+                    if not hits:
+                        return f"前100名沒有任何檔名含「{find}」（最高分{allm[0].get('score',0):.3f}）", 200
+                    return "\n".join(f"#{i} {m.get('score',0):.3f} {m.get('metadata',{}).get('source','')[:40]}"
+                                     f" | {m.get('metadata',{}).get('text','')[:30]}" for i, m in hits), 200
                 seen, out = {}, []
-                for m in sorted(ms, key=lambda x: x.get("score", 0), reverse=True):
+                for m in allm:
+                    if m.get("score", 0) <= 0.3:
+                        continue
                     s = m.get("metadata", {}).get("source", "")
                     seen[s] = seen.get(s, 0) + 1
                     if seen[s] <= 2:
