@@ -634,6 +634,23 @@ def health():
     # 暫時：檢索自檢 ?k=biao-rx-7q&q=問題 → 只算查詢向量+查Pinecone，不跑生成（近乎免費）
     if request.args.get("k", "") == "biao-rx-7q":
         q = request.args.get("q", "").strip()
+        if request.args.get("ls"):   # 列採購庫所有來源（假向量，不算 Gemini，完全免費）
+            try:
+                idx = _get_index()
+                res = idx.query(vector=[0.001] * 512, top_k=1000, include_metadata=True,
+                                namespace="", filter={"source_type": {"$eq": "doc"}})
+                srcs = {}
+                for m in res.get("matches", []):
+                    s = m.get("metadata", {}).get("source", "")
+                    srcs[s] = srcs.get(s, 0) + 1
+                kw = request.args.get("ls")
+                items = sorted(srcs.items())
+                if kw != "1":
+                    items = [(s, n) for s, n in items if kw in s]
+                return (f"採購庫不重複檔數={len(srcs)}，總片段={sum(srcs.values())}\n" +
+                        "\n".join(f"{n:>3}  {s}" for s, n in items[:200])), 200
+            except Exception as e:
+                return f"ls錯誤：{e}", 200
         if q:
             try:
                 idx = _get_index()
