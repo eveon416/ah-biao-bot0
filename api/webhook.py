@@ -628,22 +628,23 @@ def health():
     # 暫時：檢索自檢 ?k=biao-rx-7q&q=問題 → 只算查詢向量+查Pinecone，不跑生成（近乎免費）
     if request.args.get("k", "") == "biao-rx-7q":
         q = request.args.get("q", "").strip()
-        if request.args.get("genprobe"):   # 測哪些生成模型在這把(免費)key能用；429也不扣錢
-            cands = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite",
-                     "gemini-2.5-flash-lite", "gemini-1.5-flash", "gemini-1.5-flash-8b",
-                     "gemini-flash-latest"]
-            out = []
-            for m in cands:
+        if request.args.get("genprobe"):   # 測生成；顯示金鑰指紋+完整錯誤內文（不洩漏整把key）
+            import urllib.request as _u, urllib.error as _ue
+            k = GEMINI_API_KEY or ""
+            out = [f"目前 key：長度{len(k)}、末4碼=...{k[-4:] if len(k) >= 4 else '?'}"]
+            for m in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"]:
+                url = (f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={k}")
+                body = json.dumps({"contents": [{"parts": [{"text": "你好"}]}],
+                                   "generationConfig": {"maxOutputTokens": 10}}).encode()
                 try:
-                    r = _gemini_post(f"models/{m}:generateContent",
-                                     {"contents": [{"parts": [{"text": "回覆兩個字：你好"}]}],
-                                      "generationConfig": {"maxOutputTokens": 10,
-                                                           "thinkingConfig": {"thinkingBudget": 0}}})
-                    t = "".join(p.get("text", "") for p in
-                                r.get("candidates", [{}])[0].get("content", {}).get("parts", []))
-                    out.append(f"✅ {m}: {t[:10] or '(空)'}")
+                    req = _u.Request(url, data=body, headers={"Content-Type": "application/json"})
+                    with _u.urlopen(req, timeout=20) as r:
+                        out.append(f"✅ {m}: OK")
+                except _ue.HTTPError as he:
+                    detail = he.read().decode("utf-8", "ignore")[:300]
+                    out.append(f"❌ {m}: HTTP {he.code}\n   {detail}")
                 except Exception as e:
-                    out.append(f"❌ {m}: {str(e)[:40]}")
+                    out.append(f"❌ {m}: {str(e)[:80]}")
             return "\n".join(out), 200
         if request.args.get("ls"):   # 列採購庫所有來源（假向量，不算 Gemini，完全免費）
             try:
