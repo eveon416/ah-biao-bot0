@@ -628,6 +628,23 @@ def health():
     # 暫時：檢索自檢 ?k=biao-rx-7q&q=問題 → 只算查詢向量+查Pinecone，不跑生成（近乎免費）
     if request.args.get("k", "") == "biao-rx-7q":
         q = request.args.get("q", "").strip()
+        if request.args.get("genprobe"):   # 測哪些生成模型在這把(免費)key能用；429也不扣錢
+            cands = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite",
+                     "gemini-2.5-flash-lite", "gemini-1.5-flash", "gemini-1.5-flash-8b",
+                     "gemini-flash-latest"]
+            out = []
+            for m in cands:
+                try:
+                    r = _gemini_post(f"models/{m}:generateContent",
+                                     {"contents": [{"parts": [{"text": "回覆兩個字：你好"}]}],
+                                      "generationConfig": {"maxOutputTokens": 10,
+                                                           "thinkingConfig": {"thinkingBudget": 0}}})
+                    t = "".join(p.get("text", "") for p in
+                                r.get("candidates", [{}])[0].get("content", {}).get("parts", []))
+                    out.append(f"✅ {m}: {t[:10] or '(空)'}")
+                except Exception as e:
+                    out.append(f"❌ {m}: {str(e)[:40]}")
+            return "\n".join(out), 200
         if request.args.get("ls"):   # 列採購庫所有來源（假向量，不算 Gemini，完全免費）
             try:
                 idx = _get_index()
