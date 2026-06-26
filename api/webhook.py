@@ -95,8 +95,8 @@ def _embed_many(texts):
     """一次嵌入多個查詢（本地 bge-small，查詢用 query_embed）。"""
     return [v.tolist() for v in _get_embed_model().query_embed(list(texts))]
 
-# ── Gemini 生成（urllib，多模型備援抗 429/503）──────────────────────────────
-GEN_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
+# ── Gemini 生成（urllib，單一模型，不重試）──────────────────────────────────
+GEN_MODELS = ["gemini-2.5-flash-lite"]
 
 def _gemini_post(path, payload):
     url = f"https://generativelanguage.googleapis.com/v1beta/{path}?key={GEMINI_API_KEY}"
@@ -111,21 +111,17 @@ def _generate(prompt):
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2048,
                              "thinkingConfig": {"thinkingBudget": 0}},
     }
-    import time as _t
-    last = ""
-    for attempt in range(4):                      # 額度滿(429)或過載(503)→換模型重試
-        model = GEN_MODELS[attempt % len(GEN_MODELS)]
-        try:
-            resp = _gemini_post(f"models/{model}:generateContent", payload)
-            cand = resp["candidates"][0]
-            parts = cand.get("content", {}).get("parts", [])
-            text = "".join(p.get("text", "") for p in parts).strip()
-            if text:
-                return text
-        except Exception as e:
-            last = str(e)
-            _t.sleep(1.2)
-    raise RuntimeError(f"生成失敗（已試多個模型）：{last}")
+    model = GEN_MODELS[0]
+    try:
+        resp = _gemini_post(f"models/{model}:generateContent", payload)
+        cand = resp["candidates"][0]
+        parts = cand.get("content", {}).get("parts", [])
+        text = "".join(p.get("text", "") for p in parts).strip()
+        if text:
+            return text
+        raise RuntimeError("模型回傳空白內容")
+    except Exception as e:
+        raise RuntimeError(f"生成失敗：{e}")
 
 # ── Google Sheets 寫入（service account）───────────────────────────────────
 def _sheets_token():
@@ -632,7 +628,7 @@ def health():
             import urllib.request as _u, urllib.error as _ue
             k = GEMINI_API_KEY or ""
             out = [f"目前 key：長度{len(k)}、末4碼=...{k[-4:] if len(k) >= 4 else '?'}"]
-            for m in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"]:
+            for m in ["gemini-2.5-flash-lite", "gemini-2.5-flash"]:
                 url = (f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={k}")
                 body = json.dumps({"contents": [{"parts": [{"text": "你好"}]}],
                                    "generationConfig": {"maxOutputTokens": 10}}).encode()
